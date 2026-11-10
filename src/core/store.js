@@ -12,9 +12,11 @@ const SAFE_KEY = /^[A-Za-z0-9_-]{1,64}$/;
  * write the same file and no cross-process locking is needed. Writes are atomic (tmp + rename).
  */
 class JsonStore {
-    constructor(dir) {
+    constructor(dir, { shared = false } = {}) {
         this.dir = dir;
+        this.shared = shared;
         this.cache = new Map();
+        this.mtimes = new Map();
         this.writing = new Map();
         fs.mkdirSync(dir, { recursive: true });
     }
@@ -25,6 +27,32 @@ class JsonStore {
     }
 
     get(key) {
+        if (this.shared && !this.writing.has(key)) {
+            const file = this.file(key);
+            let mtime = 0;
+            try {
+                mtime = fs.statSync(file).mtimeMs;
+            } catch {
+                mtime = 0;
+            }
+            if (this.cache.has(key) && this.mtimes.get(key) === mtime) {
+                return this.cache.get(key);
+            }
+            if (!mtime) {
+                this.cache.set(key, null);
+                this.mtimes.set(key, 0);
+                return null;
+            }
+            let value = null;
+            try {
+                value = JSON.parse(fs.readFileSync(file, 'utf8'));
+            } catch (error) {
+                if (error.code !== 'ENOENT') log.warn(`Could not read ${key}:`, error.message);
+            }
+            this.cache.set(key, value);
+            this.mtimes.set(key, mtime);
+            return value;
+        }
         if (this.cache.has(key)) return this.cache.get(key);
         let value = null;
         try {
@@ -77,11 +105,19 @@ class JsonStore {
         const value = this.cache.get(key);
         if (value === null || value === undefined) {
             await fsp.rm(file, { force: true });
+            this.mtimes.set(key, 0);
             return;
         }
         const tmp = `${file}.${process.pid}.tmp`;
         await fsp.writeFile(tmp, JSON.stringify(value), 'utf8');
         await fsp.rename(tmp, file);
+        if (this.shared) {
+            try {
+                this.mtimes.set(key, fs.statSync(file).mtimeMs);
+            } catch {
+                // ignore
+            }
+        }
     }
 
     async drain() {

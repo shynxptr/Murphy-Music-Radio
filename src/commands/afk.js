@@ -41,19 +41,30 @@ module.exports = {
         if (!enable) {
             const check = checkVoice(interaction, manager, t, { requireQueue: false, join: false });
             if (check.error) return say(interaction, check.error);
-            await murphy.setAfk(guildId, { enabled: false });
-            manager.refreshPanel(guildId);
+            await murphy.setAfk(guildId, { enabled: false }, interaction.client);
+            const activeQueue = manager.getQueue(guildId);
+            if (!activeQueue?.songs?.length) {
+                const channelId = check.channel?.id || interaction.guild?.members?.me?.voice?.channelId;
+                await murphy.clearVoiceStatus(interaction.client, channelId);
+                await murphy.clearSession(guildId, interaction.client);
+                manager.distube.voices.leave(guildId);
+            } else {
+                manager.refreshPanel(guildId);
+            }
             return say(interaction, msg.disabled, { ephemeral: false });
         }
 
         const check = checkVoice(interaction, manager, t, { requireQueue: false, join: true });
         if (check.error) return say(interaction, check.error);
 
+        if (interaction.user?.id && check.channel?.id) {
+            await murphy.claimSession(guildId, interaction.user.id, check.channel.id, interaction.client);
+        }
         await murphy.setAfk(guildId, {
             enabled: true,
             voiceChannelId: check.channel.id,
             textChannelId: interaction.channelId,
-        });
+        }, interaction.client);
         manager.cancelLeaveTimers?.(guildId);
 
         const botVoiceId = interaction.guild?.members?.me?.voice?.channelId;

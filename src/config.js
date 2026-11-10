@@ -46,6 +46,9 @@ const shardList = () => {
 const config = {
     root: path.join(__dirname, '..'),
     dataDir: path.resolve(path.join(__dirname, '..'), env('DATA_DIR', 'data')),
+    sharedDir: env('SHARED_DIR')
+        ? path.resolve(path.join(__dirname, '..'), env('SHARED_DIR'))
+        : null,
     binDir: path.resolve(path.join(__dirname, '..'), env('BIN_DIR', 'bin')),
     debug: bool('DEBUG'),
 
@@ -56,6 +59,7 @@ const config = {
     },
 
     bot: {
+        priority: int('BOT_PRIORITY', 1, { min: 1, max: 100 }),
         status: env('STATUS', 'Serving Murphy · Together Around the World'),
         defaultPrefix: env('DEFAULT_PREFIX', 'f!'),
         messageContentIntent: bool('MESSAGE_CONTENT_INTENT', true),

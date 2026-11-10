@@ -11,7 +11,7 @@ const locales = new Set(Object.values(Locale));
 
 test('all commands serialize and respect Discord limits', () => {
     const bodies = commandBodies();
-    assert.equal(bodies.length, 27);
+    assert.equal(bodies.length, 28);
     const names = new Set();
     for (const body of bodies) {
         assert.match(body.name, /^[a-z0-9_-]{1,32}$/);
@@ -186,4 +186,90 @@ test('Murphy Music branding, 24/7 AFK mode, and custom voice channel status', as
 
     await murphy.clearFavorites('user1');
     assert.deepEqual(murphy.getFavorites('user1'), []);
+
+    // Session Owner (1 Bot = 1 Owner = 1 Voice) & Allow system
+    assert.equal(murphy.getSession('500'), null);
+    assert.equal(murphy.isSessionAuthorized('500', 'userA'), true);
+
+    await murphy.claimSession('500', 'userA', 'vc1');
+    assert.equal(murphy.isSessionOwner('500', 'userA'), true);
+    assert.equal(murphy.isSessionOwner('500', 'userB'), false);
+    assert.equal(murphy.isSessionAuthorized('500', 'userA'), true);
+    assert.equal(murphy.isSessionAuthorized('500', 'userB'), false);
+
+    // Allow & Disallow userB
+    const allowRes = await murphy.allowSessionUser('500', 'userB');
+    assert.equal(allowRes.ok, true);
+    assert.equal(murphy.isSessionAuthorized('500', 'userB'), true);
+
+    const dupAllow = await murphy.allowSessionUser('500', 'userB');
+    assert.equal(dupAllow.ok, false);
+    assert.equal(dupAllow.reason, 'already_allowed');
+
+    const disallowRes = await murphy.disallowSessionUser('500', 'userB');
+    assert.equal(disallowRes.ok, true);
+    assert.equal(murphy.isSessionAuthorized('500', 'userB'), false);
+
+    // Transfer Session Owner to userC (previous owner userA remains in allowedIds)
+    const transferRes = await murphy.transferSessionOwner('500', 'userC');
+    assert.equal(transferRes.ok, true);
+    assert.equal(murphy.isSessionOwner('500', 'userC'), true);
+    assert.equal(murphy.isSessionAuthorized('500', 'userC'), true);
+    assert.equal(murphy.isSessionAuthorized('500', 'userA'), true);
+
+    await murphy.clearSession('500');
+    assert.equal(murphy.getSession('500'), null);
+});
+
+test('Multi-bot cluster routing assigns 1 idle bot per voice channel and 1 bot per owner', async () => {
+    const murphy = require('../src/murphy');
+    const { parsePrefixCommand } = require('../src/handlers/prefix');
+    murphy.resetMurphyStores();
+
+    // Register Murphy 1 (idle) and Murphy 2 (idle) in guild 900
+    const makeFakeClient = (botId, priority, guildStates = {}) => ({
+        user: { id: botId, tag: `Murphy#${priority}` },
+        guilds: {
+            cache: new Map([
+                ['900', {
+                    id: '900',
+                    members: { me: { voice: { channelId: guildStates.channelId || null } } },
+                }],
+            ]),
+        },
+        music: { getQueue: () => null },
+    });
+
+    await murphy.syncClusterState(makeFakeClient('bot1', 1));
+    await murphy.syncClusterState(makeFakeClient('bot2', 2));
+
+    const makeMsg = (botId, userId, voiceChannelId, content) => ({
+        content,
+        author: { id: userId, bot: false },
+        member: { id: userId, voice: { channelId: voiceChannelId } },
+        client: { user: { id: botId } },
+        guild: {
+            id: '900',
+            client: { user: { id: botId } },
+            members: { cache: new Map([['bot1', {}], ['bot2', {}]]) },
+            voiceStates: { cache: new Map() },
+        },
+    });
+
+    const parsedPlay = parsePrefixCommand('f!p Hindia');
+
+    // Both bots idle -> User 1 in VC 1 triggers ONLY bot1 (priority 1), bot2 stays silent
+    assert.equal(murphy.routePrefixCommand(makeMsg('bot1', 'u1', 'vc1', 'f!p Hindia'), parsedPlay).shouldHandle, true);
+    assert.equal(murphy.routePrefixCommand(makeMsg('bot2', 'u1', 'vc1', 'f!p Hindia'), parsedPlay).shouldHandle, false);
+
+    // Now bot1 is active in vc1 owned by u1
+    await murphy.claimSession('900', 'u1', 'vc1', makeFakeClient('bot1', 1, { channelId: 'vc1' }));
+
+    // User 2 in VC 2 runs f!p Hindia -> bot1 is busy in vc1, so ONLY bot2 responds!
+    assert.equal(murphy.routePrefixCommand(makeMsg('bot1', 'u2', 'vc2', 'f!p Hindia'), parsedPlay).shouldHandle, false);
+    assert.equal(murphy.routePrefixCommand(makeMsg('bot2', 'u2', 'vc2', 'f!p Hindia'), parsedPlay).shouldHandle, true);
+
+    // User 1 (who already owns bot1 in vc1) tries to call f!p from vc3 -> routed back to bot1 (cannot claim bot2!)
+    assert.equal(murphy.routePrefixCommand(makeMsg('bot1', 'u1', 'vc3', 'f!p Hindia'), parsedPlay).shouldHandle, true);
+    assert.equal(murphy.routePrefixCommand(makeMsg('bot2', 'u1', 'vc3', 'f!p Hindia'), parsedPlay).shouldHandle, false);
 });

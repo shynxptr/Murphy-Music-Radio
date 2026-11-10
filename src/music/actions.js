@@ -47,14 +47,18 @@ async function previous(queue, t) {
     return result(true, t('buttonhandler.moved_to_previous'));
 }
 
-async function stop(queue, t, manager) {
+async function stop(queue, t, manager, { forceLeave = false } = {}) {
     await manager.endPanel(queue.id, { titleKey: 'buttonhandler.music_stopped_title' });
     const channelId = queue.voiceChannel?.id;
     await queue.stop();
-    if (murphy.isAfk(queue.id)) {
+    if (forceLeave) {
+        await murphy.setAfk(queue.id, { enabled: false }, manager.client);
+    }
+    if (!forceLeave && murphy.isAfk(queue.id)) {
         await murphy.syncVoiceStatus(manager.client, queue.id, channelId, null);
     } else {
         await murphy.clearVoiceStatus(manager.client, channelId);
+        await murphy.clearSession(queue.id, manager.client);
         manager.distube.voices.leave(queue.id);
     }
     return result(true, t('buttonhandler.music_stopped_title'));

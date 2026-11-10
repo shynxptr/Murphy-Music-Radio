@@ -110,7 +110,10 @@ function requesterLine(t, song) {
  * The now-playing panel. `state` is a plain object so it can be tested without Discord.
  */
 function playerPanel(t, state) {
-    const { song, paused, currentTime = 0, volume, repeatMode = 0, autoplay = false, filter = null, afk = false, upcoming = [], upcomingDuration = 0 } = state;
+    const {
+        song, paused, currentTime = 0, volume, repeatMode = 0, autoplay = false, filter = null,
+        afk = false, sessionOwnerId = null, sessionAllowedCount = 0, upcoming = [], upcomingDuration = 0,
+    } = state;
     const c = container();
 
     const status = paused ? t('commands.nowplaying.status_paused') : t('commands.nowplaying.title');
@@ -123,7 +126,11 @@ function playerPanel(t, state) {
         c.addTextDisplayComponents(text(`\`${formatDuration(position)}\` ${progressBar(position, song.duration)} \`${formatDuration(song.duration)}\``));
     }
 
+    const ownerBadge = sessionOwnerId
+        ? `👑 Owner: <@${sessionOwnerId}>${sessionAllowedCount > 0 ? ` (+${sessionAllowedCount})` : ''}`
+        : null;
     const details = [
+        ownerBadge,
         requesterLine(t, song),
         t('commands.nowplaying.volume', { volume }),
         loopLabel(t, repeatMode),

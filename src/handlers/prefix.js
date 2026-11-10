@@ -4,6 +4,7 @@ const path = require('node:path');
 const { MessageFlags } = require('discord.js');
 const config = require('../config');
 const i18n = require('../core/i18n');
+const murphy = require('../murphy');
 const { JsonStore } = require('../core/store');
 const { say, IGNORED_CODES } = require('./guards');
 const log = require('../core/logger').createLogger('prefix');
@@ -13,8 +14,8 @@ const INVALID_PREFIX = /[\s/\\`@<>]/;
 
 let guildStore = null;
 let userStore = null;
-const guilds = () => (guildStore ??= new JsonStore(path.join(config.dataDir, 'prefixes', 'guilds')));
-const users = () => (userStore ??= new JsonStore(path.join(config.dataDir, 'prefixes', 'users')));
+const guilds = () => (guildStore ??= new JsonStore(path.join(murphy.sharedDataDir(), 'prefixes', 'guilds'), { shared: true }));
+const users = () => (userStore ??= new JsonStore(path.join(murphy.sharedDataDir(), 'prefixes', 'users'), { shared: true }));
 
 /**
  * Reset in-memory stores (used by tests when DATA_DIR changes).
@@ -102,6 +103,7 @@ const COMMAND_ALIASES = {
     voicestatus: ['voicestatus', 'vs', 'vcstatus'],
     favorite: ['favorite', 'fav', 'favs'],
     grab: ['grab', 'save', 'dm'],
+    session: ['session', 'owner', 'allow', 'disallow', 'unallow', 'deny', 'transfer'],
 };
 
 const ALIAS_TO_COMMAND = new Map();
@@ -217,6 +219,7 @@ function createOptions(commandName, alias, rawArgs) {
 
     return {
         getString(name) {
+            if (name === 'alias') return alias;
             if (commandName === 'play' && name === 'query') return rawArgs;
             if (commandName === 'search' && name === 'query') return rawArgs;
             if (commandName === 'seek' && name === 'time') return rawArgs;
@@ -229,7 +232,13 @@ function createOptions(commandName, alias, rawArgs) {
             if (commandName === 'favorite') return null;
             if (commandName === 'prefix' && name === 'raw') return rawArgs;
             if (commandName === 'prefix') return null;
+            if (commandName === 'session' && name === 'raw') return rawArgs;
+            if (commandName === 'session' && name === 'alias') return alias;
+            if (commandName === 'session') return null;
             return rawArgs || null;
+        },
+        getUser() {
+            return null;
         },
         getBoolean(name) {
             if (commandName === 'play' && name === 'next') return alias === 'playnext' || alias === 'pn';
@@ -360,9 +369,16 @@ async function onMessage(message) {
         const command = message.client.commands?.get(commandName);
         if (!command) return null;
 
+        const routing = murphy.routePrefixCommand(message, parsed);
+        if (!routing.shouldHandle) return null;
+
         const interaction = createMessageInteraction(message, parsed);
         const t = i18n.forGuild(message.guild);
         const ctx = { client: message.client, manager: message.client.music, t };
+
+        if (routing.allBusy) {
+            return say(interaction, murphy.allBotsBusyMessage(t.lang));
+        }
 
         if ((commandName === 'play' || commandName === 'search') && !rawArgs) {
             return say(interaction, usageHint(t.lang, prefix, alias, commandName));

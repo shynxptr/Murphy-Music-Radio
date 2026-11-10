@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const { DisTube, DisTubeError, Events: DisTubeEvents, Playlist, RepeatMode, isNsfwChannel } = require('distube');
 const { SpotifyPlugin } = require('@distube/spotify');
-const { RESTJSONErrorCodes } = require('discord.js');
+const { AuditLogEvent, RESTJSONErrorCodes } = require('discord.js');
 const config = require('../config');
 const i18n = require('../core/i18n');
 const murphy = require('../murphy');
@@ -97,7 +97,10 @@ class MusicManager {
         });
 
         this.#bindEvents();
-        this.saveTimer = setInterval(() => this.saveAllSessions(), SESSION_SAVE_INTERVAL_MS);
+        this.saveTimer = setInterval(() => {
+            this.saveAllSessions();
+            murphy.syncClusterState(this.client);
+        }, SESSION_SAVE_INTERVAL_MS);
         this.saveTimer.unref();
     }
 
@@ -125,6 +128,7 @@ class MusicManager {
      */
     snapshot(queue) {
         const upcoming = queue.songs.slice(1);
+        const session = murphy.getSession(queue.id);
         return {
             song: queue.songs[0],
             paused: queue.paused,
@@ -134,6 +138,8 @@ class MusicManager {
             autoplay: queue.autoplay,
             filter: queue.filters.names[0] || null,
             afk: murphy.isAfk(queue.id),
+            sessionOwnerId: session?.ownerId || null,
+            sessionAllowedCount: Array.isArray(session?.allowedIds) ? session.allowedIds.length : 0,
             upcoming,
             upcomingDuration: upcoming.reduce((sum, song) => sum + (song.duration || 0), 0),
         };
@@ -396,10 +402,23 @@ class MusicManager {
     #scheduleLeave(guildId) {
         const state = this.state(guildId);
         this.#clearLeave(state);
-        if (!config.bot.leaveOnFinishMs || murphy.isAfk(guildId)) return;
+        if (murphy.isAfk(guildId)) return;
+        const guild = this.client.guilds?.cache?.get(guildId);
+        if (murphy.getSession(guildId) && guild && this.listenerCount(guild) === 0) {
+            murphy.clearSession(guildId, this.client).catch(() => undefined);
+            this.distube.voices.leave(guildId);
+            return;
+        }
+        if (!config.bot.leaveOnFinishMs) {
+            murphy.clearSession(guildId, this.client).catch(() => undefined);
+            return;
+        }
         state.leave = setTimeout(() => {
             state.leave = null;
-            if (!this.getQueue(guildId) && !murphy.isAfk(guildId)) this.distube.voices.leave(guildId);
+            if (!this.getQueue(guildId) && !murphy.isAfk(guildId)) {
+                murphy.clearSession(guildId, this.client).catch(() => undefined);
+                this.distube.voices.leave(guildId);
+            }
         }, config.bot.leaveOnFinishMs);
         state.leave.unref?.();
     }
@@ -414,11 +433,64 @@ class MusicManager {
             voiceState.channelId === channelId && voiceState.id !== this.client.user.id && !voiceState.member?.user?.bot).size;
     }
 
+    async #wasAdminDisconnected(guild, targetUserId) {
+        if (!guild?.fetchAuditLogs) return false;
+        try {
+            const logs = await guild.fetchAuditLogs({ type: AuditLogEvent.MemberDisconnect, limit: 3 });
+            const now = Date.now();
+            return logs.entries.some((entry) =>
+                now - entry.createdTimestamp < 6000
+                && entry.executorId
+                && entry.executorId !== targetUserId
+                && (!entry.target?.id || entry.target.id === targetUserId));
+        } catch {
+            return false;
+        }
+    }
+
     /**
      * Pause when everyone leaves, resume when someone returns, leave after LEAVE_ON_EMPTY.
+     * When a Session Owner is active, the bot stays in the channel and keeps playing even if
+     * the owner leaves, unless an Admin forcibly disconnects the bot or the Session Owner.
      */
     async handleVoiceStateUpdate(oldState, newState) {
         const guild = newState.guild || oldState.guild;
+        if (!guild) return;
+
+        // If the bot itself was disconnected from the voice channel (e.g. by an Admin), reset the session immediately.
+        if (oldState.id === this.client.user?.id && oldState.channelId && !newState.channelId) {
+            this.cancelLeaveTimers(guild.id);
+            await murphy.setAfk(guild.id, { enabled: false }, this.client);
+            await murphy.clearSession(guild.id, this.client);
+            const activeQueue = this.getQueue(guild.id);
+            if (activeQueue) {
+                await this.endPanel(guild.id, { titleKey: 'musicmanager.playback_ended' });
+                await activeQueue.stop().catch(() => undefined);
+            }
+            return;
+        }
+
+        const session = murphy.getSession(guild.id);
+
+        // If the Session Owner was disconnected from the voice channel by an Admin, release the session and leave.
+        if (session?.ownerId && oldState.id === session.ownerId && oldState.channelId && !newState.channelId) {
+            if (await this.#wasAdminDisconnected(guild, session.ownerId)) {
+                this.cancelLeaveTimers(guild.id);
+                await murphy.setAfk(guild.id, { enabled: false }, this.client);
+                await murphy.clearSession(guild.id, this.client);
+                const activeQueue = this.getQueue(guild.id);
+                if (activeQueue) {
+                    await this.endPanel(guild.id, { titleKey: 'musicmanager.playback_ended' });
+                    await activeQueue.stop().catch(() => undefined);
+                }
+                this.distube.voices.leave(guild.id);
+                return;
+            }
+        }
+
+        // While a Session Owner holds the bot, never pause or leave on empty when the owner steps out.
+        if (session?.ownerId) return;
+
         const queue = this.getQueue(guild.id);
         if (!queue) return;
         const state = this.state(guild.id);
@@ -556,6 +628,7 @@ class MusicManager {
                 await murphy.syncVoiceStatus(this.client, guildId, voiceChannel.id, null);
             }
         }
+        await murphy.syncClusterState(this.client);
         return restored;
     }
 
@@ -564,6 +637,7 @@ class MusicManager {
      */
     async shutdown() {
         await this.saveAllSessions();
+        await murphy.removeClusterState(this.client);
         this.shuttingDown = true;
         clearInterval(this.saveTimer);
         await this.sessions.drain();
@@ -621,6 +695,9 @@ class MusicManager {
         d.on(DisTubeEvents.DISCONNECT, (queue) => {
             this.endPanel(queue.id, { titleKey: 'musicmanager.playback_ended' });
             murphy.clearVoiceStatus(this.client, queue.voiceChannel?.id);
+            if (!murphy.isAfk(queue.id)) {
+                murphy.clearSession(queue.id, this.client).catch(() => undefined);
+            }
         });
 
         d.on(DisTubeEvents.DELETE_QUEUE, (queue) => {

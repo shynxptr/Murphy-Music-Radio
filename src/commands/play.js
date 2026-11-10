@@ -3,6 +3,7 @@
 const { Playlist } = require('distube');
 const config = require('../config');
 const i18n = require('../core/i18n');
+const murphy = require('../murphy');
 const { command } = require('./_shared');
 const { checkVoice, panelChannel, say } = require('../handlers/guards');
 const { choices } = require('../music/suggest');
@@ -15,6 +16,11 @@ async function playFromInteraction(interaction, ctx, query, { next = false } = {
     const { t, manager } = ctx;
     const check = checkVoice(interaction, manager, t, { requireQueue: false, join: true });
     if (check.error) return say(interaction, check.error);
+
+    const hadSession = Boolean(murphy.getSession(interaction.guildId));
+    if (interaction.user?.id && check.channel?.id) {
+        await murphy.claimSession(interaction.guildId, interaction.user.id, check.channel.id, interaction.client);
+    }
 
     const startedAt = Date.now();
     let answered = false;
@@ -46,6 +52,9 @@ async function playFromInteraction(interaction, ctx, query, { next = false } = {
         if (!answered) await answer(outcome);
         return null;
     } catch (error) {
+        if (!hadSession && !manager.getQueue(interaction.guildId) && !murphy.isAfk(interaction.guildId)) {
+            await murphy.clearSession(interaction.guildId, interaction.client);
+        }
         if (error?.errorCode === 'QUEUE_FULL') return say(interaction, t('ui.queue_full', { max: config.bot.maxQueueSize }));
         const key = manager.explainError(error, startedAt);
         if (key === 'errors.unknown') log.error(`Failed to play "${query}":`, error);
