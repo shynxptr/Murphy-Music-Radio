@@ -51,6 +51,26 @@ class MusicManager {
         this.spotify = new SpotifyPlugin(config.spotify.clientId && config.spotify.clientSecret
             ? { api: { clientId: config.spotify.clientId, clientSecret: config.spotify.clientSecret } }
             : {});
+        const origSpotifyGetData = this.spotify.api.getData.bind(this.spotify.api);
+        this.spotify.api.getData = async (url) => {
+            try {
+                return await origSpotifyGetData(url);
+            } catch (error) {
+                // Spotify Web API returns 403 for Development Mode apps on playlists; fall back to public embed scraping.
+                const prevToken = this.spotify.api._tokenAvailable;
+                const prevExp = this.spotify.api._expirationTime;
+                try {
+                    this.spotify.api._tokenAvailable = false;
+                    this.spotify.api._expirationTime = Date.now() + 60_000;
+                    return await origSpotifyGetData(url);
+                } catch {
+                    throw error;
+                } finally {
+                    this.spotify.api._tokenAvailable = prevToken;
+                    this.spotify.api._expirationTime = prevExp;
+                }
+            }
+        };
         this.direct = new RelayedDirectLinkPlugin({ relay: this.relay });
         this.generic = new GenericPlugin({ relay: this.relay });
 
