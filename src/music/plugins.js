@@ -290,6 +290,16 @@ class YouTubePlugin extends ExtractorPlugin {
     async prefetchQuery(query, guildId) {
         const info = await this.searchInfo(query, guildId, { priority: 'low' });
         if (info) this.base.rememberInfo(guildId, watchUrl(info.id), info);
+        return info;
+    }
+
+    async precacheResolved(info, parentSong) {
+        const song = new Song(
+            { ...youtubeInfo(info), plugin: this },
+            { member: parentSong.member, metadata: parentSong.metadata },
+        );
+        song.stream.url = await this.getStreamURL(song);
+        return song;
     }
 
     async getRelatedSongs(song) {

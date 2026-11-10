@@ -458,7 +458,8 @@ class MusicManager {
     // ─── Prefetch ──────────────────────────────────────────────────────
 
     /**
-     * Resolve the next song's stream in the background so it starts without delay.
+     * Resolve and pre-cache the next song's audio stream in the background so transitions are instant,
+     * and prefetch metadata for the following 2 songs in the queue.
      */
     prefetchNext(queue) {
         if (queue.repeatMode === RepeatMode.SONG) return;
@@ -466,11 +467,31 @@ class MusicManager {
         if (!next) return;
         let task = null;
         if (next.stream.playFromSource) {
-            if (!next.stream.url && typeof next.plugin?.prefetch === 'function') task = next.plugin.prefetch(next);
+            if (!next.stream.url && typeof next.plugin?.prefetch === 'function') {
+                task = Promise.resolve(next.plugin.prefetch(next)).then(async () => {
+                    if (!next.stream.url && typeof next.plugin?.getStreamURL === 'function') {
+                        next.stream.url = await next.plugin.getStreamURL(next);
+                    }
+                });
+            }
         } else if (!next.stream.song && typeof next.plugin?.createSearchQuery === 'function') {
-            task = this.youtube.prefetchQuery(next.plugin.createSearchQuery(next), queue.id);
+            task = Promise.resolve(this.youtube.prefetchQuery(next.plugin.createSearchQuery(next), queue.id)).then(async (info) => {
+                if (info?.id && !next.stream.song && typeof this.youtube.precacheResolved === 'function') {
+                    next.stream.song = await this.youtube.precacheResolved(info, next);
+                }
+            });
         }
-        task?.catch((error) => log.debug(`Prefetch failed for ${next.name}: ${error.message}`));
+        task?.then(() => {
+            for (const upcoming of queue.songs.slice(2, 4)) {
+                if (upcoming.stream.playFromSource) {
+                    if (!upcoming.stream.url && typeof upcoming.plugin?.prefetch === 'function') {
+                        upcoming.plugin.prefetch(upcoming).catch(() => undefined);
+                    }
+                } else if (!upcoming.stream.song && typeof upcoming.plugin?.createSearchQuery === 'function') {
+                    this.youtube.prefetchQuery(upcoming.plugin.createSearchQuery(upcoming), queue.id).catch(() => undefined);
+                }
+            }
+        }).catch((error) => log.debug(`Prefetch failed for ${next.name}: ${error.message}`));
     }
 
     // ─── Sessions ──────────────────────────────────────────────────────

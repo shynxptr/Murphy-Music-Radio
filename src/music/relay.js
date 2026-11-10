@@ -129,7 +129,7 @@ class StreamRelay {
      * removed video) is detected before playback starts instead of ffmpeg failing later.
      * The bytes are kept until ffmpeg connects.
      */
-    warm(relayUrl, { timeoutMs = 25_000, holdMs = 60_000 } = {}) {
+    warm(relayUrl, { timeoutMs = 25_000, holdMs = 15 * 60_000 } = {}) {
         const id = this.#idOf(relayUrl);
         const entry = id && this.entries.get(id);
         if (!entry) return Promise.reject(new Error('Unknown relay stream'));
