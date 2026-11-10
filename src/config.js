@@ -56,8 +56,10 @@ const config = {
     },
 
     bot: {
-        status: env('STATUS', '/play'),
-        color: parseColor(env('EMBED_COLOR', '#5865F2')),
+        status: env('STATUS', 'Serving Murphy · Together Around the World'),
+        defaultPrefix: env('DEFAULT_PREFIX', 'f!'),
+        messageContentIntent: bool('MESSAGE_CONTENT_INTENT', true),
+        color: parseColor(env('EMBED_COLOR', '#1E3A8A')),
         supportServer: env('SUPPORT_SERVER'),
         website: env('WEBSITE'),
         defaultLanguage: env('DEFAULT_LANGUAGE', 'en'),

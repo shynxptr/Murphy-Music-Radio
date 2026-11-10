@@ -2,6 +2,7 @@
 
 const { RepeatMode, DisTubeError } = require('distube');
 const config = require('../config');
+const murphy = require('../murphy');
 const { formatDuration } = require('../core/format');
 const views = require('../ui/views');
 
@@ -48,8 +49,14 @@ async function previous(queue, t) {
 
 async function stop(queue, t, manager) {
     await manager.endPanel(queue.id, { titleKey: 'buttonhandler.music_stopped_title' });
+    const channelId = queue.voiceChannel?.id;
     await queue.stop();
-    manager.distube.voices.leave(queue.id);
+    if (murphy.isAfk(queue.id)) {
+        await murphy.syncVoiceStatus(manager.client, queue.id, channelId, null);
+    } else {
+        await murphy.clearVoiceStatus(manager.client, channelId);
+        manager.distube.voices.leave(queue.id);
+    }
     return result(true, t('buttonhandler.music_stopped_title'));
 }
 

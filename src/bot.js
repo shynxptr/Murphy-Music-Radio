@@ -6,6 +6,7 @@ const logger = require('./core/logger');
 const { loadCommands } = require('./commands');
 const { MusicManager } = require('./music/manager');
 const { onInteraction } = require('./handlers/interactions');
+const { onMessage } = require('./handlers/prefix');
 const ytdlp = require('./music/ytdlp');
 
 const log = logger.createLogger('bot');
@@ -15,9 +16,15 @@ logger.setDebug(config.debug);
  * Create the Discord client with the music system attached. Exported for tests.
  */
 function createClient() {
+    const intents = [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessages,
+    ];
+    if (config.bot.messageContentIntent) intents.push(GatewayIntentBits.MessageContent);
+
     const client = new Client({
-        // Only the intents the bot needs: no privileged intents required.
-        intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
+        intents,
         presence: { activities: [{ name: config.bot.status, type: ActivityType.Listening }] },
     });
 
@@ -26,6 +33,7 @@ function createClient() {
     client.music = new MusicManager(client);
 
     client.on(Events.InteractionCreate, onInteraction);
+    client.on(Events.MessageCreate, onMessage);
     client.on(Events.VoiceStateUpdate, (oldState, newState) => {
         client.music.handleVoiceStateUpdate(oldState, newState).catch((error) => log.warn('Voice state handling failed:', error.message));
     });

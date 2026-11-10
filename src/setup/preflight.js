@@ -120,6 +120,14 @@ async function run({ fetchImpl = fetch } = {}) {
             config.discord.clientId = app.id;
             process.env.CLIENT_ID = app.id; // shards read it from the environment
             report.ok('Discord token', `${name} (application ${app.id})`);
+            if (typeof app.flags === 'number' && !(app.flags & ((1 << 18) | (1 << 19)))) {
+                config.bot.messageContentIntent = false;
+                process.env.MESSAGE_CONTENT_INTENT = 'false';
+                report.warn('Message Content Intent is off (needed for custom prefix commands like f!p)', [
+                    'Enable it at https://discord.com/developers/applications > your bot > Bot > Privileged Gateway Intents > Message Content Intent.',
+                    'Slash commands (/play, /prefix) and @bot mentions still work in the meantime.',
+                ]);
+            }
         } else if (result.reason === 'invalid') {
             fail('Discord rejected DISCORD_TOKEN (wrong or reset token)', TOKEN_STEPS);
         } else {

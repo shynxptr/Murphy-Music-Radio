@@ -6,6 +6,7 @@ const { SpotifyPlugin } = require('@distube/spotify');
 const { RESTJSONErrorCodes } = require('discord.js');
 const config = require('../config');
 const i18n = require('../core/i18n');
+const murphy = require('../murphy');
 const { YouTubePlugin, GenericPlugin, RelayedSoundCloudPlugin, RelayedDirectLinkPlugin } = require('./plugins');
 const { getRelay } = require('./relay');
 const { SessionStore } = require('./session');
@@ -112,6 +113,7 @@ class MusicManager {
             repeatMode: queue.repeatMode,
             autoplay: queue.autoplay,
             filter: queue.filters.names[0] || null,
+            afk: murphy.isAfk(queue.id),
             upcoming,
             upcomingDuration: upcoming.reduce((sum, song) => sum + (song.duration || 0), 0),
         };
@@ -150,7 +152,9 @@ class MusicManager {
 
         let resolved;
         try {
-            resolved = await this.distube.handler.resolve(query, { member, metadata });
+            resolved = typeof query === 'object' && query !== null
+                ? query
+                : await this.distube.handler.resolve(query, { member, metadata });
         } catch (error) {
             if (joining && !(await joining) && !this.getQueue(guildId)) this.#scheduleLeave(guildId);
             throw error;
@@ -362,13 +366,20 @@ class MusicManager {
         state.leave = null;
     }
 
+    cancelLeaveTimers(guildId) {
+        const state = this.state(guildId);
+        this.#clearLeave(state);
+        clearTimeout(state.empty);
+        state.empty = null;
+    }
+
     #scheduleLeave(guildId) {
         const state = this.state(guildId);
         this.#clearLeave(state);
-        if (!config.bot.leaveOnFinishMs) return;
+        if (!config.bot.leaveOnFinishMs || murphy.isAfk(guildId)) return;
         state.leave = setTimeout(() => {
             state.leave = null;
-            if (!this.getQueue(guildId)) this.distube.voices.leave(guildId);
+            if (!this.getQueue(guildId) && !murphy.isAfk(guildId)) this.distube.voices.leave(guildId);
         }, config.bot.leaveOnFinishMs);
         state.leave.unref?.();
     }
@@ -392,25 +403,28 @@ class MusicManager {
         if (!queue) return;
         const state = this.state(guild.id);
         const listeners = this.listenerCount(guild);
+        const afk = murphy.isAfk(guild.id);
 
-        if (listeners === 0 && !state.empty && config.bot.leaveOnEmptyMs) {
-            // Arm the timer before any await so concurrent voice updates can't start a second one.
-            state.empty = setTimeout(async () => {
-                state.empty = null;
-                const current = this.getQueue(guild.id);
-                if (!current || this.listenerCount(guild) > 0) return;
-                state.pausedForEmpty = false;
-                await this.endPanel(guild.id, { titleKey: 'musicmanager.playback_ended', descriptionKey: 'ui.left_empty' });
-                await current.stop().catch(() => undefined);
-                this.distube.voices.leave(guild.id);
-            }, config.bot.leaveOnEmptyMs);
-            state.empty.unref?.();
+        if (listeners === 0 && !state.empty && (config.bot.leaveOnEmptyMs || afk)) {
+            if (!afk && config.bot.leaveOnEmptyMs) {
+                // Arm the timer before any await so concurrent voice updates can't start a second one.
+                state.empty = setTimeout(async () => {
+                    state.empty = null;
+                    const current = this.getQueue(guild.id);
+                    if (!current || this.listenerCount(guild) > 0 || murphy.isAfk(guild.id)) return;
+                    state.pausedForEmpty = false;
+                    await this.endPanel(guild.id, { titleKey: 'musicmanager.playback_ended', descriptionKey: 'ui.left_empty' });
+                    await current.stop().catch(() => undefined);
+                    this.distube.voices.leave(guild.id);
+                }, config.bot.leaveOnEmptyMs);
+                state.empty.unref?.();
+            }
             if (!queue.paused) {
                 state.pausedForEmpty = true;
                 await queue.pause().catch(() => undefined);
                 this.refreshPanel(guild.id);
             }
-        } else if (listeners > 0 && state.empty) {
+        } else if (listeners > 0 && (state.empty || state.pausedForEmpty)) {
             clearTimeout(state.empty);
             state.empty = null;
             if (state.pausedForEmpty && queue.paused) {
@@ -462,7 +476,7 @@ class MusicManager {
                 const voiceChannel = await guild.channels.fetch(data.voiceChannelId).catch(() => null);
                 const textChannel = data.textChannelId ? await guild.channels.fetch(data.textChannelId).catch(() => null) : null;
                 if (!voiceChannel?.isVoiceBased() || !voiceChannel.joinable) continue;
-                if (!this.listenerCount(guild, voiceChannel.id)) continue;
+                if (!this.listenerCount(guild, voiceChannel.id) && !murphy.isAfk(guildId)) continue;
 
                 const songs = this.sessions.buildSongs(data, guild);
                 if (!songs.length) continue;
@@ -490,6 +504,17 @@ class MusicManager {
             }
         }
         if (restored) log.ok(`Restored ${restored} music session(s)`);
+        for (const guildId of murphy.afkGuildIds()) {
+            const guild = this.client.guilds.cache.get(guildId);
+            if (!guild || this.getQueue(guildId)) continue;
+            const afkData = murphy.getAfk(guildId);
+            if (!afkData?.voiceChannelId) continue;
+            const voiceChannel = await guild.channels.fetch(afkData.voiceChannelId).catch(() => null);
+            if (voiceChannel?.isVoiceBased() && voiceChannel.joinable) {
+                await this.distube.voices.join(voiceChannel).catch(() => undefined);
+                await murphy.syncVoiceStatus(this.client, guildId, voiceChannel.id, null);
+            }
+        }
         return restored;
     }
 
@@ -538,6 +563,7 @@ class MusicManager {
             this.sendPanel(queue);
             this.#startRefresh(queue);
             this.prefetchNext(queue);
+            murphy.syncVoiceStatus(this.client, queue.id, queue.voiceChannel?.id, song);
             if (!this.shuttingDown) this.sessions.save(queue);
         });
 
@@ -547,11 +573,13 @@ class MusicManager {
 
         d.on(DisTubeEvents.FINISH, (queue) => {
             this.endPanel(queue.id, { titleKey: 'musicplayer.queue_completed', descriptionKey: 'musicplayer.queue_completed_desc' });
+            murphy.syncVoiceStatus(this.client, queue.id, queue.voiceChannel?.id, null);
             this.#scheduleLeave(queue.id);
         });
 
         d.on(DisTubeEvents.DISCONNECT, (queue) => {
             this.endPanel(queue.id, { titleKey: 'musicmanager.playback_ended' });
+            murphy.clearVoiceStatus(this.client, queue.voiceChannel?.id);
         });
 
         d.on(DisTubeEvents.DELETE_QUEUE, (queue) => {

@@ -14,6 +14,7 @@ const {
     ThumbnailBuilder,
 } = require('discord.js');
 const config = require('../config');
+const murphy = require('../murphy');
 const { formatDuration, progressBar, truncate, link, escapeMarkdown, safeUrl } = require('../core/format');
 
 const V2 = MessageFlags.IsComponentsV2;
@@ -109,13 +110,13 @@ function requesterLine(t, song) {
  * The now-playing panel. `state` is a plain object so it can be tested without Discord.
  */
 function playerPanel(t, state) {
-    const { song, paused, currentTime = 0, volume, repeatMode = 0, autoplay = false, filter = null, upcoming = [], upcomingDuration = 0 } = state;
+    const { song, paused, currentTime = 0, volume, repeatMode = 0, autoplay = false, filter = null, afk = false, upcoming = [], upcomingDuration = 0 } = state;
     const c = container();
 
     const status = paused ? t('commands.nowplaying.status_paused') : t('commands.nowplaying.title');
     const meta = [song.uploader?.name ? escapeMarkdown(truncate(song.uploader.name, 60)) : null,
         song.isLive ? t('ui.live') : formatDuration(song.duration)].filter(Boolean).join(' · ');
-    headline(c, `-# ${status}\n### ${link(song.name, song.url, 90)}\n${meta}`, song.thumbnail);
+    headline(c, `-# ${murphy.BRAND_NAME} · ${status}\n### ${link(song.name, song.url, 90)}\n${meta}`, song.thumbnail);
 
     if (!song.isLive && song.duration > 0) {
         const position = Math.min(currentTime, song.duration);
@@ -128,14 +129,15 @@ function playerPanel(t, state) {
         loopLabel(t, repeatMode),
         autoplay ? t('buttons.autoplay_on') : t('buttons.autoplay_off'),
         filter ? t('ui.filter', { filter: filterLabel(t, filter) }) : null,
+        afk ? '24/7 AFK' : null,
     ].filter(Boolean);
     c.addTextDisplayComponents(text(`-# ${details.join(' · ')}`));
     if (song.fallbackFrom) c.addTextDisplayComponents(text(`-# ${t('ui.fallback_soundcloud')}`));
 
     const next = upcoming[0];
     const queueLine = next
-        ? `${t('commands.nowplaying.next_song')}: ${link(next.name, next.url, 70)}\n-# ${t('commands.nowplaying.footer_more_songs', { count: upcoming.length })} · ${formatDuration(upcomingDuration)}`
-        : `-# ${t('commands.nowplaying.footer_no_songs')}`;
+        ? `${t('commands.nowplaying.next_song')}: ${link(next.name, next.url, 70)}\n-# ${t('commands.nowplaying.footer_more_songs', { count: upcoming.length })} · ${formatDuration(upcomingDuration)}\n-# ${murphy.FOOTER}`
+        : `-# ${t('commands.nowplaying.footer_no_songs')}\n-# ${murphy.FOOTER}`;
     c.addTextDisplayComponents(text(queueLine));
 
     c.addSeparatorComponents(separator());
@@ -174,6 +176,7 @@ function endedPanel(t, { title, description, song } = {}) {
     const lines = [`### ${title}`];
     if (description) lines.push(description);
     if (song) lines.push(`-# ${link(song.name, song.url, 90)}`);
+    lines.push(`-# ${murphy.FOOTER}`);
     c.addTextDisplayComponents(text(lines.join('\n')));
     return { components: [c], flags: V2, allowedMentions: { parse: [] } };
 }
@@ -266,7 +269,7 @@ function searchView(t, { query, results, token }) {
 
 function helpView(t, { commands, stats }) {
     const c = container();
-    c.addTextDisplayComponents(text(`### ${t('commands.help.title')}\n${t('commands.help.main_description')}`));
+    c.addTextDisplayComponents(text(`### ${murphy.BRAND_NAME} — ${t('commands.help.title')}\n${t('commands.help.main_description')}`));
     c.addSeparatorComponents(separator());
     const lines = commands.map((command) => `</${command.name}:${command.id || '0'}> ${command.description}`);
     const plain = commands.map((command) => `\`/${command.name}\` ${command.description}`);
@@ -278,15 +281,22 @@ function helpView(t, { commands, stats }) {
             t('commands.help.stats_active', { count: stats.active }),
             t('commands.help.stats_uptime', { time: stats.uptime }),
             `${stats.ping} ms`,
-        ].join(' · ')}`));
+        ].join(' · ')}\n-# ${murphy.FOOTER}`));
     }
-    const links = [
-        config.bot.supportServer && [t('commands.help.button_support'), config.bot.supportServer],
-        config.bot.website && [t('commands.help.button_website'), config.bot.website],
-        config.bot.invite && [t('ui.invite'), config.bot.invite],
-    ].filter((item) => item && safeUrl(item[1]));
-    if (links.length) {
-        c.addActionRowComponents(row(...links.map(([label, url]) => new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(label).setURL(url))));
+    const buttons = [];
+    if (config.bot.supportServer && safeUrl(config.bot.supportServer)) {
+        buttons.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(t('commands.help.button_support')).setURL(config.bot.supportServer));
+    }
+    if (config.bot.website && safeUrl(config.bot.website)) {
+        buttons.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(t('commands.help.button_website')).setURL(config.bot.website));
+    } else {
+        buttons.push(button('m:web_soon', `${t('commands.help.button_website')} (Coming Soon)`).setDisabled(true));
+    }
+    if (config.bot.invite && safeUrl(config.bot.invite)) {
+        buttons.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(t('ui.invite')).setURL(config.bot.invite));
+    }
+    if (buttons.length) {
+        c.addActionRowComponents(row(...buttons));
     }
     return { components: [c], flags: EPHEMERAL_V2, allowedMentions: { parse: [] } };
 }
