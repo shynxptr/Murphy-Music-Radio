@@ -76,7 +76,7 @@ async function start() {
     else log.error(`yt-dlp at "${ytdlp.binary}" does not work: ${ytdlpStatus.error}. YouTube will not play until this is fixed.`);
 
     const client = createClient();
-    const managed = Boolean(process.env.SHARDING_MANAGER);
+    const managed = Boolean(process.env.SHARDING_MANAGER || process.env.MURPHY_EXTRA_BOT);
 
     const exit = async (code) => {
         await client.shutdown();

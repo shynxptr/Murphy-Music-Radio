@@ -57,7 +57,7 @@ function spawnExtraBots(extras, isStopping) {
                 BOT_PRIORITY: botCfg.priority,
                 DATA_DIR: botCfg.dataDir,
                 STATUS: botCfg.status,
-                SHARDING_MANAGER: '1',
+                MURPHY_EXTRA_BOT: '1',
             },
             stdio: 'inherit',
         });
@@ -159,10 +159,12 @@ async function main() {
     });
     log.ok(`${manager.shards.size} shard(s) running`);
 
-    const extras = collectExtraBotConfigs();
-    if (extras.length > 0) {
-        extraChildren = spawnExtraBots(extras, () => stopping);
-        log.ok(`Multi-bot cluster active: Murphy #1 + ${extras.length} additional bot(s)`);
+    if (!process.env.MURPHY_PM2_CLUSTER) {
+        const extras = collectExtraBotConfigs();
+        if (extras.length > 0) {
+            extraChildren = spawnExtraBots(extras, () => stopping);
+            log.ok(`Multi-bot cluster active: Murphy #1 + ${extras.length} additional bot(s)`);
+        }
     }
 }
 
