@@ -109,14 +109,8 @@ class MusicManager {
         }, SESSION_SAVE_INTERVAL_MS);
         this.saveTimer.unref();
 
-        this.statsTimer = setInterval(() => {
-            for (const queue of this.distube.queues.collection.values()) {
-                if (!queue || queue.stopped || queue.paused || !queue.songs[0]) continue;
-                const guild = this.client.guilds.cache.get(queue.id);
-                if (guild) vip.recordListeningTick(guild, queue.songs[0], 20).catch(() => undefined);
-            }
-        }, 20_000);
-        this.statsTimer.unref();
+        // Temporarily disabled while f!card is turned off to minimize background disk I/O
+        this.statsTimer = null;
     }
 
     // ─── Per guild runtime state ───────────────────────────────────────

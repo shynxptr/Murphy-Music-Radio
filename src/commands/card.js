@@ -39,6 +39,8 @@ function parseRawCardArgs(alias, raw) {
     return { action: 'view', targetId: null, value: '' };
 }
 
+const CARD_FEATURE_ENABLED = false;
+
 module.exports = {
     category: 'settings',
     data: command('card', 'View or customize your Jockie-style Murphy Music profile card')
@@ -78,6 +80,12 @@ module.exports = {
             targetId = parsed.targetId || null;
         }
         action = action || 'view';
+
+        if (!CARD_FEATURE_ENABLED && !['theme', 'radioname', 'radio'].includes(String(alias).toLowerCase())) {
+            return say(interaction, isId
+                ? `🛠️ Fitur **Murphy Card** (\`f!card\`) sedang dinonaktifkan sementara.\n-# ${murphy.FOOTER}`
+                : `🛠️ The **Murphy Card** (\`f!card\`) feature is temporarily disabled.\n-# ${murphy.FOOTER}`);
+        }
 
         if (action === 'view') {
             if (!interaction.deferred && !interaction.replied) await interaction.deferReply();
@@ -187,3 +195,4 @@ module.exports = {
         return null;
     },
 };
+
