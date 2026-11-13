@@ -1,5 +1,6 @@
 'use strict';
 
+const { Worker, isMainThread, parentPort, workerData } = require('node:worker_threads');
 const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const { formatStatDuration } = require('../murphy_vip');
 
@@ -220,7 +221,7 @@ async function safeLoadImage(url) {
 /**
  * Render a Jockie-style Murphy Blue-Sky Aesthetic profile card PNG buffer.
  */
-async function renderProfileCard({
+async function renderProfileCardDirect({
     username,
     avatarUrl,
     bannerUrl = null,
@@ -375,11 +376,49 @@ async function renderProfileCard({
         emptyText: emptyLabel,
     });
 
-    return canvas.toBuffer('image/png');
+    return Buffer.from(await canvas.encode('png'));
+}
+
+function renderProfileCard(options = {}) {
+    if (!isMainThread) return renderProfileCardDirect(options);
+    return new Promise((resolve, reject) => {
+        const worker = new Worker(__filename, { workerData: options });
+        let settled = false;
+        worker.once('message', (msg) => {
+            if (settled) return;
+            settled = true;
+            if (msg?.ok && msg.buffer) {
+                resolve(Buffer.from(msg.buffer));
+            } else {
+                reject(new Error(msg?.error || 'Card render failed'));
+            }
+        });
+        worker.once('error', (err) => {
+            if (settled) return;
+            settled = true;
+            // Fallback to in-process async encode if worker cannot be spawned
+            renderProfileCardDirect(options).then(resolve, reject);
+        });
+        worker.once('exit', (code) => {
+            if (settled && code === 0) return;
+            if (!settled) {
+                settled = true;
+                reject(new Error(`Card worker exited with code ${code}`));
+            }
+        });
+    });
+}
+
+if (!isMainThread && parentPort) {
+    renderProfileCardDirect(workerData)
+        .then((buffer) => parentPort.postMessage({ ok: true, buffer }))
+        .catch((error) => parentPort.postMessage({ ok: false, error: error?.message || String(error) }));
 }
 
 module.exports = {
     CARD_WIDTH,
     CARD_HEIGHT,
     renderProfileCard,
+    renderProfileCardDirect,
 };
+
