@@ -272,6 +272,25 @@ test('Multi-bot cluster routing assigns 1 idle bot per voice channel and 1 bot p
     // User 1 (who already owns bot1 in vc1) tries to call f!p from vc3 -> routed back to bot1 (cannot claim bot2!)
     assert.equal(murphy.routePrefixCommand(makeMsg('bot1', 'u1', 'vc3', 'f!p Hindia'), parsedPlay).shouldHandle, true);
     assert.equal(murphy.routePrefixCommand(makeMsg('bot2', 'u1', 'vc3', 'f!p Hindia'), parsedPlay).shouldHandle, false);
+
+    // Partial members cache (real Discord without GuildMembers intent): each bot only caches itself + author
+    await murphy.clearSession('900', makeFakeClient('bot1', 1));
+    await murphy.syncClusterState(makeFakeClient('bot1', 1));
+    await murphy.syncClusterState(makeFakeClient('bot2', 2));
+    const makePartialMsg = (botId, userId, voiceChannelId) => ({
+        content: 'f!p Hindia',
+        author: { id: userId, bot: false },
+        member: { id: userId, voice: { channelId: voiceChannelId } },
+        client: { user: { id: botId } },
+        guild: {
+            id: '900',
+            client: { user: { id: botId } },
+            members: { cache: new Map([[botId, {}], [userId, {}]]) },
+            voiceStates: { cache: new Map() },
+        },
+    });
+    assert.equal(murphy.routePrefixCommand(makePartialMsg('bot1', 'u1', 'vc1'), parsedPlay).shouldHandle, true);
+    assert.equal(murphy.routePrefixCommand(makePartialMsg('bot2', 'u1', 'vc1'), parsedPlay).shouldHandle, false);
 });
 
 test('Murphy Premium licenses, vouchers, limits, and free (#1-5) vs VIP (#6-20) routing', async () => {

@@ -460,6 +460,7 @@ async function syncClusterState(client) {
             priority: config.bot.priority || 1,
             tier: config.bot.tier || 'free',
             updatedAt: Date.now(),
+            guildIds: client?.guilds?.cache ? [...client.guilds.cache.keys()].map(String) : [],
             guilds: collectClientGuildStates(client),
         });
     } catch (error) {
@@ -488,10 +489,9 @@ function getClusterBotsForGuild(guild) {
     for (const key of keys) {
         const data = cluster().get(key);
         if (!data?.botId || now - (data.updatedAt || 0) > CLUSTER_STALE_MS) continue;
-        // Verify the bot is present in this guild if member/voice cache is populated
+        // Verify the bot is actually a member of this guild using its synced guildIds list
         const inVoiceCache = guild.voiceStates?.cache?.get(data.botId);
-        const inMemberCache = guild.members?.cache?.has(data.botId);
-        if (data.botId !== myBotId && guild.members?.cache?.size > 1 && !inMemberCache && !inVoiceCache && !data.guilds?.[guild.id]) {
+        if (data.botId !== myBotId && Array.isArray(data.guildIds) && !data.guildIds.includes(String(guild.id)) && !inVoiceCache && !data.guilds?.[guild.id]) {
             continue;
         }
         seen.add(data.botId);
