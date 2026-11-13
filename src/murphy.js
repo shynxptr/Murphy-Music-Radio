@@ -563,11 +563,22 @@ function isGlobalNonVoiceCommand(commandName, rawArgs) {
     return false;
 }
 
+function isIdleOffloadableCommand(commandName, alias, rawArgs) {
+    if (['help', 'premium', 'redeem', 'prem', 'history'].includes(commandName)) return true;
+    if (commandName === 'card') {
+        const lowerAlias = String(alias || '').toLowerCase();
+        if (['theme', 'radioname', 'radio'].includes(lowerAlias)) return false;
+        const first = String(rawArgs ?? '').trim().split(/\s+/)[0]?.toLowerCase() || '';
+        return !['color', 'theme', 'warna', 'bio', 'desc', 'status', 'banner', 'bg', 'background', 'radio', 'radioname', 'title', 'volume', 'vol', 'reset', 'default'].includes(first);
+    }
+    return false;
+}
+
 /**
  * Decide whether this bot instance should respond to a prefix command when multiple
  * Murphy bots (Murphy 1–20) share the same guild and prefix.
  */
-function routePrefixCommand(message, { prefix, commandName, rawArgs }) {
+function routePrefixCommand(message, { prefix, commandName, alias, rawArgs }) {
     if (prefix === '@bot ') return { shouldHandle: true, allBusy: false, allFreeBusy: false };
     const guild = message.guild;
     const myBotId = message.client?.user?.id;
@@ -578,6 +589,7 @@ function routePrefixCommand(message, { prefix, commandName, rawArgs }) {
 
     const primaryBot = bots[0];
     const primaryFreeBot = bots.find((b) => b.tier !== 'premium') || primaryBot;
+    const idleAnyBot = bots.find((b) => !b.channelId && !b.ownerId);
     const userId = String(message.author.id);
     const userIsPremium = isPremiumUser(userId);
     const userChannelId = message.member?.voice?.channelId || null;
@@ -586,7 +598,10 @@ function routePrefixCommand(message, { prefix, commandName, rawArgs }) {
     const botAllowedForUser = bots.find((b) => b.allowedIds.includes(userId) && b.channelId);
 
     if (isGlobalNonVoiceCommand(commandName, rawArgs)) {
-        const target = botInUserChannel || botOwnedByUser || primaryBot;
+        // Offload heavy/read-only commands like f!card to an idle bot so active voice bots never stutter
+        const target = isIdleOffloadableCommand(commandName, alias, rawArgs)
+            ? (idleAnyBot || primaryBot || botInUserChannel)
+            : (botInUserChannel || botOwnedByUser || primaryBot);
         return { shouldHandle: target.botId === String(myBotId), allBusy: false, allFreeBusy: false };
     }
 

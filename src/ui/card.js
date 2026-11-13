@@ -379,40 +379,82 @@ async function renderProfileCardDirect({
     return Buffer.from(await canvas.encode('png'));
 }
 
+let cardWorker = null;
+let cardWorkerIdleTimer = null;
+let nextCardJobId = 1;
+const pendingCardJobs = new Map();
+const WORKER_IDLE_MS = 15_000;
+
+function resetWorkerIdleTimer() {
+    if (cardWorkerIdleTimer) clearTimeout(cardWorkerIdleTimer);
+    cardWorkerIdleTimer = setTimeout(() => {
+        if (pendingCardJobs.size === 0 && cardWorker) {
+            const w = cardWorker;
+            cardWorker = null;
+            w.terminate().catch(() => undefined);
+        }
+    }, WORKER_IDLE_MS);
+    cardWorkerIdleTimer.unref?.();
+}
+
+function getCardWorker() {
+    if (cardWorker) {
+        resetWorkerIdleTimer();
+        return cardWorker;
+    }
+    const w = new Worker(__filename);
+    w.unref?.();
+    w.on('message', (msg) => {
+        const job = pendingCardJobs.get(msg?.id);
+        if (!job) return;
+        pendingCardJobs.delete(msg.id);
+        resetWorkerIdleTimer();
+        if (msg.ok && msg.buffer) {
+            job.resolve(Buffer.from(msg.buffer));
+        } else {
+            job.reject(new Error(msg?.error || 'Card render failed'));
+        }
+    });
+    w.on('error', (err) => {
+        if (cardWorker === w) cardWorker = null;
+        for (const [id, job] of pendingCardJobs.entries()) {
+            pendingCardJobs.delete(id);
+            renderProfileCardDirect(job.options).then(job.resolve, job.reject);
+        }
+    });
+    w.on('exit', () => {
+        if (cardWorker === w) cardWorker = null;
+        for (const [id, job] of pendingCardJobs.entries()) {
+            pendingCardJobs.delete(id);
+            renderProfileCardDirect(job.options).then(job.resolve, job.reject);
+        }
+    });
+    cardWorker = w;
+    resetWorkerIdleTimer();
+    return w;
+}
+
 function renderProfileCard(options = {}) {
     if (!isMainThread) return renderProfileCardDirect(options);
     return new Promise((resolve, reject) => {
-        const worker = new Worker(__filename, { workerData: options });
-        let settled = false;
-        worker.once('message', (msg) => {
-            if (settled) return;
-            settled = true;
-            if (msg?.ok && msg.buffer) {
-                resolve(Buffer.from(msg.buffer));
-            } else {
-                reject(new Error(msg?.error || 'Card render failed'));
-            }
-        });
-        worker.once('error', (err) => {
-            if (settled) return;
-            settled = true;
-            // Fallback to in-process async encode if worker cannot be spawned
+        const id = nextCardJobId++;
+        pendingCardJobs.set(id, { resolve, reject, options });
+        try {
+            const w = getCardWorker();
+            w.postMessage({ id, options });
+        } catch {
+            pendingCardJobs.delete(id);
             renderProfileCardDirect(options).then(resolve, reject);
-        });
-        worker.once('exit', (code) => {
-            if (settled && code === 0) return;
-            if (!settled) {
-                settled = true;
-                reject(new Error(`Card worker exited with code ${code}`));
-            }
-        });
+        }
     });
 }
 
 if (!isMainThread && parentPort) {
-    renderProfileCardDirect(workerData)
-        .then((buffer) => parentPort.postMessage({ ok: true, buffer }))
-        .catch((error) => parentPort.postMessage({ ok: false, error: error?.message || String(error) }));
+    parentPort.on('message', ({ id, options } = {}) => {
+        renderProfileCardDirect(options)
+            .then((buffer) => parentPort.postMessage({ id, ok: true, buffer }))
+            .catch((error) => parentPort.postMessage({ id, ok: false, error: error?.message || String(error) }));
+    });
 }
 
 module.exports = {
