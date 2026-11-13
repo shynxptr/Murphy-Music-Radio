@@ -4,6 +4,7 @@ const { Playlist } = require('distube');
 const config = require('../config');
 const i18n = require('../core/i18n');
 const murphy = require('../murphy');
+const vip = require('../murphy_vip');
 const { command } = require('./_shared');
 const { checkVoice, panelChannel, say } = require('../handlers/guards');
 const { choices } = require('../music/suggest');
@@ -19,7 +20,15 @@ async function playFromInteraction(interaction, ctx, query, { next = false } = {
 
     const hadSession = Boolean(murphy.getSession(interaction.guildId));
     if (interaction.user?.id && check.channel?.id) {
-        await murphy.claimSession(interaction.guildId, interaction.user.id, check.channel.id, interaction.client);
+        const isVip = murphy.isPremiumUser(interaction.user.id);
+        const trusted = isVip ? vip.getTrustedIds(interaction.user.id) : [];
+        await murphy.claimSession(interaction.guildId, interaction.user.id, check.channel.id, interaction.client, trusted);
+        if (!hadSession && isVip) {
+            const prefs = vip.getVipPrefs(interaction.user.id);
+            if (prefs.nick) {
+                interaction.guild?.members?.me?.setNickname?.(prefs.nick).catch(() => undefined);
+            }
+        }
     }
 
     const startedAt = Date.now();

@@ -5,6 +5,7 @@ const { MessageFlags } = require('discord.js');
 const config = require('../config');
 const i18n = require('../core/i18n');
 const murphy = require('../murphy');
+const vip = require('../murphy_vip');
 const { JsonStore } = require('../core/store');
 const { say, IGNORED_CODES } = require('./guards');
 const log = require('../core/logger').createLogger('prefix');
@@ -73,7 +74,7 @@ function validatePrefix(input) {
 
 // ─── Command & Alias table ─────────────────────────────────────────────
 
-const DIRECT_FILTERS = new Set(['bassboost', 'nightcore', 'vaporwave', '3d', '8d', 'karaoke', 'echo', 'surround', 'tremolo', 'nofilter', 'clearfilter']);
+const DIRECT_FILTERS = new Set(['bassboost', 'nightcore', 'vaporwave', 'slowed', 'lofi', 'treble', '3d', '8d', 'karaoke', 'echo', 'surround', 'tremolo', 'nofilter', 'clearfilter']);
 
 const COMMAND_ALIASES = {
     play: ['play', 'p', 'playnext', 'pn'],
@@ -107,6 +108,14 @@ const COMMAND_ALIASES = {
     premium: ['premium', 'vip', 'plan'],
     redeem: ['redeem', 'claim'],
     prem: ['prem'],
+    card: ['card', 'profile', 'stats', 'theme', 'radioname', 'radio'],
+    playlist: ['playlist', 'pl', 'savequeue', 'sq'],
+    history: ['history', 'hist', 'recent'],
+    follow: ['follow', 'followme'],
+    trust: ['trust', 'untrust', 'squad'],
+    sleep: ['sleep', 'timer'],
+    nick: ['nick', 'nickname'],
+    clean: ['clean', 'autoclean'],
 };
 
 const ALIAS_TO_COMMAND = new Map();
@@ -240,6 +249,16 @@ function createOptions(commandName, alias, rawArgs) {
             if (commandName === 'session') return null;
             if (commandName === 'redeem' && name === 'code') return rawArgs;
             if (commandName === 'prem' && name === 'raw') return rawArgs;
+            if (commandName === 'card' && name === 'raw') return rawArgs;
+            if (commandName === 'card') return null;
+            if (commandName === 'playlist' && name === 'raw') return rawArgs;
+            if (commandName === 'playlist') return null;
+            if (commandName === 'follow' && name === 'mode') return rawArgs || null;
+            if (commandName === 'trust' && name === 'raw') return rawArgs;
+            if (commandName === 'trust') return null;
+            if (commandName === 'sleep' && name === 'duration') return rawArgs;
+            if (commandName === 'nick' && name === 'name') return rawArgs || null;
+            if (commandName === 'clean' && name === 'mode') return rawArgs || null;
             return rawArgs || null;
         },
         getUser() {
@@ -401,6 +420,10 @@ async function onMessage(message) {
         }
         if (commandName === 'move' && rawArgs.split(/\s+/).filter(Boolean).length < 2) {
             return say(interaction, usageHint(t.lang, prefix, alias, commandName));
+        }
+
+        if (murphy.isPremiumUser(message.author.id) && vip.getVipPrefs(message.author.id).autoClean) {
+            setTimeout(() => message.delete?.().catch(() => undefined), 3000).unref?.();
         }
 
         return await command.execute(interaction, ctx);

@@ -42,3 +42,4 @@ module.exports = {
         return say(interaction, msg, { ephemeral: false });
     },
 };
+

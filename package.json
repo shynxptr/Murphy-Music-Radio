@@ -29,6 +29,7 @@
     "@distube/direct-link": "^1.0.1",
     "@distube/soundcloud": "^2.0.4",
     "@distube/spotify": "^2.0.2",
+    "@napi-rs/canvas": "^1.1.1",
     "discord.js": "^14.27.0",
     "distube": "^5.2.3",
     "dotenv": "^16.4.7",

@@ -20,11 +20,14 @@ const { formatDuration, progressBar, truncate, link, escapeMarkdown, safeUrl } =
 const V2 = MessageFlags.IsComponentsV2;
 const EPHEMERAL_V2 = MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral;
 
-const FILTERS = ['bassboost', 'nightcore', 'vaporwave', '3d', 'karaoke', 'echo', 'surround', 'tremolo'];
+const FILTERS = ['bassboost', 'nightcore', 'vaporwave', 'slowed', 'lofi', 'treble', '3d', 'karaoke', 'echo', 'surround', 'tremolo'];
 const FILTER_LABELS = {
     bassboost: 'Bass Boost',
     nightcore: 'Nightcore',
     vaporwave: 'Vaporwave',
+    slowed: 'Slowed + Reverb',
+    lofi: 'Lo-Fi Chill',
+    treble: 'Crystal Treble',
     '3d': '8D',
     karaoke: 'Karaoke',
     echo: 'Echo',
@@ -53,6 +56,8 @@ const ID = {
     lyricsPage: 'ly:',
     search: 's:',
     language: 'lang:set',
+    playlistPick: 'pl:',
+    historyPick: 'hist:',
 };
 
 const text = (content) => new TextDisplayBuilder().setContent(content);
@@ -113,14 +118,17 @@ function playerPanel(t, state) {
     const {
         song, paused, currentTime = 0, volume, repeatMode = 0, autoplay = false, filter = null,
         afk = false, sessionOwnerId = null, sessionAllowedCount = 0, sessionIsPremium = false,
+        sessionColor = null, sessionRadioName = null,
         upcoming = [], upcomingDuration = 0,
     } = state;
-    const c = container();
+    const c = container(sessionColor ? config.parseColor(sessionColor) : config.bot.color);
 
     const status = paused ? t('commands.nowplaying.status_paused') : t('commands.nowplaying.title');
     const meta = [song.uploader?.name ? escapeMarkdown(truncate(song.uploader.name, 60)) : null,
         song.isLive ? t('ui.live') : formatDuration(song.duration)].filter(Boolean).join(' · ');
-    const headerBrand = sessionIsPremium ? `💎 ${murphy.BRAND_NAME} VIP` : murphy.BRAND_NAME;
+    const headerBrand = sessionIsPremium
+        ? `💎 ${sessionRadioName ? escapeMarkdown(truncate(sessionRadioName, 40)) : `${murphy.BRAND_NAME} VIP`}`
+        : murphy.BRAND_NAME;
     headline(c, `-# ${headerBrand} · ${status}\n### ${link(song.name, song.url, 90)}\n${meta}`, song.thumbnail);
 
     if (!song.isLive && song.duration > 0) {

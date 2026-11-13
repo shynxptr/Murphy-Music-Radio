@@ -11,7 +11,7 @@ const locales = new Set(Object.values(Locale));
 
 test('all commands serialize and respect Discord limits', () => {
     const bodies = commandBodies();
-    assert.equal(bodies.length, 31);
+    assert.equal(bodies.length, 39);
     const names = new Set();
     for (const body of bodies) {
         assert.match(body.name, /^[a-z0-9_-]{1,32}$/);
@@ -341,4 +341,72 @@ test('Murphy Premium licenses, vouchers, limits, and free (#1-5) vs VIP (#6-20) 
     // Revoke premium works
     assert.equal(await murphy.revokePremium('vipUser'), true);
     assert.equal(murphy.isPremiumUser('vipUser'), false);
+});
+
+test('VIP features: Spotify library auto-save, history, stats, trusted squad, and Jockie-style Canvas card', async () => {
+    const vip = require('../src/murphy_vip');
+    const { renderProfileCard } = require('../src/ui/card');
+    vip.resetVipStores();
+
+    // Auto-save Spotify playlist & pin
+    await vip.savePlaylistEntry('u1', {
+        type: 'link',
+        name: 'Nongkrong Malam',
+        url: 'https://open.spotify.com/playlist/abc',
+        source: 'spotify',
+        count: 42,
+    });
+    await vip.savePlaylistEntry('u1', {
+        type: 'queue',
+        name: 'Mabar Mix',
+        source: 'custom',
+        count: 2,
+        songs: [{ name: 'Track A', url: 'https://youtube.com/watch?v=1' }, { name: 'Track B', url: 'https://youtube.com/watch?v=2' }],
+    });
+    assert.equal(vip.getPlaylists('u1').length, 2);
+    await vip.togglePinPlaylist('u1', 2);
+    assert.equal(vip.getPlaylists('u1')[0].pinned, true);
+
+    // History
+    await vip.addHistory('u1', { name: 'Tarot', url: 'https://youtube.com/watch?v=tarot', duration: 210 });
+    assert.equal(vip.getHistory('u1').length, 1);
+
+    // Trusted squad
+    const trustRes = await vip.addTrustedUser('u1', 'u2');
+    assert.equal(trustRes.ok, true);
+    assert.deepEqual(vip.getTrustedIds('u1'), ['u2']);
+
+    // Listening stats tick (Top Servers, Top Friends, Top Tracks)
+    const fakeGuild = {
+        id: 'g1',
+        name: 'BRATVA || NO CIRCLE!!',
+        client: { user: { id: 'bot1' } },
+        members: { me: { voice: { channelId: 'vc1' } } },
+        voiceStates: {
+            cache: new Map([
+                ['u1', { id: 'u1', channelId: 'vc1', member: { user: { username: 'zoelian_ptr', bot: false } } }],
+                ['u2', { id: 'u2', channelId: 'vc1', member: { user: { username: 'zannn._07', bot: false } } }],
+            ]),
+        },
+    };
+    await vip.recordListeningTick(fakeGuild, { name: 'Tarot', url: 'https://youtube.com/watch?v=tarot' }, 12960);
+    const top = vip.getTopStats('u1');
+    assert.equal(top.topServers[0].name, 'BRATVA || NO CIRCLE!!');
+    assert.equal(top.topFriends[0].name, 'zannn._07');
+    assert.equal(top.topTracks[0].name, 'Tarot');
+    assert.equal(vip.formatStatDuration(12960), '3h 36m');
+
+    // Render PNG profile card
+    const png = await renderProfileCard({
+        username: 'zoelian_ptr',
+        avatarUrl: null,
+        accentColor: '#0EA5E9',
+        radioName: 'MURPHY MUSIC',
+        isPremium: true,
+        stats: top,
+        lang: 'id',
+    });
+    assert.ok(Buffer.isBuffer(png));
+    assert.ok(png.length > 5000);
+    assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
 });

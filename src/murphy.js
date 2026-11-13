@@ -318,7 +318,7 @@ function isSessionAuthorized(guildId, userId) {
     return Array.isArray(session.allowedIds) && session.allowedIds.includes(id);
 }
 
-async function claimSession(guildId, userId, channelId = null, client = null) {
+async function claimSession(guildId, userId, channelId = null, client = null, initialAllowedIds = []) {
     if (!guildId || !userId) return null;
     const id = String(guildId);
     const existing = getSession(id);
@@ -331,9 +331,12 @@ async function claimSession(guildId, userId, channelId = null, client = null) {
         }
         return existing;
     }
+    const cleanAllowed = [...new Set((Array.isArray(initialAllowedIds) ? initialAllowedIds : [])
+        .map((uid) => String(uid))
+        .filter((uid) => uid && uid !== String(userId)))].slice(0, MAX_ALLOWED_USERS);
     const record = {
         ownerId: String(userId),
-        allowedIds: [],
+        allowedIds: cleanAllowed,
         channelId: channelId ? String(channelId) : null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -536,11 +539,19 @@ function isSummonCommand(commandName, rawArgs) {
         const first = String(rawArgs ?? '').trim().split(/\s+/)[0]?.toLowerCase() || '';
         return ['play', 'p', 'start'].includes(first) || /^\d+$/.test(first);
     }
+    if (commandName === 'playlist') {
+        const first = String(rawArgs ?? '').trim().split(/\s+/)[0]?.toLowerCase() || '';
+        return Boolean(first) && !['list', 'ls', 'show', 'save', 'savequeue', 'add', 'remove', 'rm', 'del', 'delete', 'pin', 'unpin'].includes(first);
+    }
     return false;
 }
 
 function isGlobalNonVoiceCommand(commandName, rawArgs) {
-    if (['help', 'prefix', 'language', 'premium', 'redeem', 'prem'].includes(commandName)) return true;
+    if (['help', 'prefix', 'language', 'premium', 'redeem', 'prem', 'card', 'history', 'follow', 'trust', 'clean'].includes(commandName)) return true;
+    if (commandName === 'playlist') {
+        const first = String(rawArgs ?? '').trim().split(/\s+/)[0]?.toLowerCase() || '';
+        return !first || ['list', 'ls', 'show', 'remove', 'rm', 'del', 'delete', 'pin', 'unpin'].includes(first);
+    }
     if (commandName === 'favorite') {
         const trimmed = String(rawArgs ?? '').trim();
         if (!trimmed) return true; // list

@@ -10,10 +10,12 @@ const {
 } = require('discord.js');
 const i18n = require('../core/i18n');
 const murphy = require('../murphy');
+const vip = require('../murphy_vip');
 const actions = require('../music/actions');
 const views = require('../ui/views');
 const { checkVoice, say, IGNORED_CODES } = require('./guards');
 const { playFromInteraction } = require('../commands/play');
+const { playSavedEntry } = require('../commands/playlist');
 const { searches } = require('../commands/search');
 const { showLyrics, pages: lyricsPages } = require('../commands/lyrics');
 const log = require('../core/logger').createLogger('interactions');
@@ -158,6 +160,30 @@ async function handleSearchPick(interaction, ctx) {
     return playFromInteraction(interaction, ctx, song.url);
 }
 
+async function handlePlaylistPick(interaction, ctx) {
+    const ownerId = interaction.customId.slice(ID.playlistPick.length);
+    if (interaction.user.id !== ownerId) {
+        return say(interaction, ctx.t('buttonhandler.invalid_selection'));
+    }
+    const list = vip.getPlaylists(ownerId);
+    const chosen = list[Number(interaction.values[0])];
+    if (!chosen) return interaction.update(asUpdate(views.notice(ctx.t('buttonhandler.search_expired'))));
+    await interaction.deferUpdate();
+    return playSavedEntry(interaction, ctx, chosen);
+}
+
+async function handleHistoryPick(interaction, ctx) {
+    const ownerId = interaction.customId.slice(ID.historyPick.length);
+    if (interaction.user.id !== ownerId) {
+        return say(interaction, ctx.t('buttonhandler.invalid_selection'));
+    }
+    const list = vip.getHistory(ownerId);
+    const chosen = list[Number(interaction.values[0])];
+    if (!chosen) return interaction.update(asUpdate(views.notice(ctx.t('buttonhandler.search_expired'))));
+    await interaction.deferUpdate();
+    return playFromInteraction(interaction, ctx, chosen.url);
+}
+
 async function handleLanguage(interaction, { t, manager }) {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
         return say(interaction, t('commands.language.permission_required_button'));
@@ -193,6 +219,8 @@ async function route(interaction) {
         if (id.startsWith(ID.queuePage)) return handleQueuePage(interaction, ctx);
         if (id.startsWith(ID.lyricsPage)) return handleLyricsPage(interaction, ctx);
         if (id.startsWith(ID.search)) return handleSearchPick(interaction, ctx);
+        if (id.startsWith(ID.playlistPick)) return handlePlaylistPick(interaction, ctx);
+        if (id.startsWith(ID.historyPick)) return handleHistoryPick(interaction, ctx);
         if (id === ID.language) return handleLanguage(interaction, ctx);
     }
     return null;

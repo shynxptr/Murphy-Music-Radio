@@ -3,6 +3,7 @@
 const { command } = require('./_shared');
 const { checkVoice, say } = require('../handlers/guards');
 const murphy = require('../murphy');
+const vip = require('../murphy_vip');
 
 function messages(lang) {
     if (lang === 'id') {
@@ -62,7 +63,7 @@ module.exports = {
         }
 
         if (interaction.user?.id && check.channel?.id) {
-            await murphy.claimSession(guildId, interaction.user.id, check.channel.id, interaction.client);
+            await murphy.claimSession(guildId, interaction.user.id, check.channel.id, interaction.client, vip.getTrustedIds(interaction.user.id));
         }
         await murphy.setAfk(guildId, {
             enabled: true,

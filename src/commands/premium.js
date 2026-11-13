@@ -79,3 +79,4 @@ module.exports = {
         return say(interaction, lines.join('\n'));
     },
 };
+

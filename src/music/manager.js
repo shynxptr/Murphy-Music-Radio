@@ -7,6 +7,7 @@ const { AuditLogEvent, RESTJSONErrorCodes } = require('discord.js');
 const config = require('../config');
 const i18n = require('../core/i18n');
 const murphy = require('../murphy');
+const vip = require('../murphy_vip');
 const { YouTubePlugin, GenericPlugin, RelayedSoundCloudPlugin, RelayedDirectLinkPlugin } = require('./plugins');
 const { getRelay } = require('./relay');
 const { SessionStore } = require('./session');
@@ -77,6 +78,11 @@ class MusicManager {
         this.distube = new DisTube(client, {
             // Order matters: the first extractor handles text searches (YouTube); the generic yt-dlp plugin must be last.
             plugins: [this.youtube, this.spotify, this.soundcloud, this.direct, this.generic],
+            customFilters: {
+                slowed: 'asetrate=44100*0.85,aresample=44100,aecho=0.8:0.88:60:0.4',
+                lofi: 'lowpass=f=3200,highpass=f=120,asetrate=44100*0.95,aresample=44100',
+                treble: 'treble=g=5',
+            },
             savePreviousSongs: true,
             emitAddSongWhenCreatingQueue: false,
             emitAddListWhenCreatingQueue: false,
@@ -102,6 +108,15 @@ class MusicManager {
             murphy.syncClusterState(this.client);
         }, SESSION_SAVE_INTERVAL_MS);
         this.saveTimer.unref();
+
+        this.statsTimer = setInterval(() => {
+            for (const queue of this.distube.queues.collection.values()) {
+                if (!queue || queue.stopped || queue.paused || !queue.songs[0]) continue;
+                const guild = this.client.guilds.cache.get(queue.id);
+                if (guild) vip.recordListeningTick(guild, queue.songs[0], 20).catch(() => undefined);
+            }
+        }, 20_000);
+        this.statsTimer.unref();
     }
 
     // ─── Per guild runtime state ───────────────────────────────────────
@@ -109,7 +124,7 @@ class MusicManager {
     state(guildId) {
         let state = this.guilds.get(guildId);
         if (!state) {
-            state = { panel: null, chain: Promise.resolve(), playLock: Promise.resolve(), debounce: null, refresh: null, leave: null, empty: null, pausedForEmpty: false };
+            state = { panel: null, chain: Promise.resolve(), playLock: Promise.resolve(), debounce: null, refresh: null, leave: null, empty: null, sleep: null, sleepEndsAt: null, pausedForEmpty: false };
             this.guilds.set(guildId, state);
         }
         return state;
@@ -129,6 +144,8 @@ class MusicManager {
     snapshot(queue) {
         const upcoming = queue.songs.slice(1);
         const session = murphy.getSession(queue.id);
+        const sessionIsPremium = Boolean(session?.ownerId && murphy.isPremiumUser(session.ownerId));
+        const vipPrefs = sessionIsPremium ? vip.getVipPrefs(session.ownerId) : null;
         return {
             song: queue.songs[0],
             paused: queue.paused,
@@ -140,7 +157,9 @@ class MusicManager {
             afk: murphy.isAfk(queue.id),
             sessionOwnerId: session?.ownerId || null,
             sessionAllowedCount: Array.isArray(session?.allowedIds) ? session.allowedIds.length : 0,
-            sessionIsPremium: Boolean(session?.ownerId && murphy.isPremiumUser(session.ownerId)),
+            sessionIsPremium,
+            sessionColor: vipPrefs?.color || null,
+            sessionRadioName: vipPrefs?.radioName || null,
             upcoming,
             upcomingDuration: upcoming.reduce((sum, song) => sum + (song.duration || 0), 0),
         };
@@ -226,6 +245,18 @@ class MusicManager {
             };
             // Answer the user now: starting the audio stream can take a moment more.
             if (onQueued) await Promise.resolve(onQueued(outcome)).catch((error) => log.debug(`Reply failed: ${error.message}`));
+
+            // Auto-save Spotify/YouTube link playlists for Murphy Premium users
+            if (resolved instanceof Playlist && resolved.url && member?.id && murphy.isPremiumUser(member.id)) {
+                vip.savePlaylistEntry(member.id, {
+                    type: 'link',
+                    name: resolved.name || 'Saved Playlist',
+                    url: resolved.url,
+                    source: resolved.source || 'spotify',
+                    count: resolved.songs.length,
+                    thumbnail: resolved.thumbnail || resolved.songs[0]?.thumbnail || null,
+                }).catch(() => undefined);
+            }
 
             await this.distube.play(voiceChannel, resolved, { member, textChannel, metadata, position });
             const current = this.getQueue(guildId);
@@ -493,6 +524,22 @@ class MusicManager {
             }
         }
 
+        // Follow-Me Mode (Premium): if the Session Owner moves to another voice channel, follow them there.
+        if (session?.ownerId && oldState.id === session.ownerId && oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
+            const botChannelId = guild.members?.me?.voice?.channelId;
+            if (botChannelId !== newState.channelId && murphy.isPremiumUser(session.ownerId) && vip.getVipPrefs(session.ownerId).followMe) {
+                const targetChannel = newState.channel || guild.channels?.cache?.get(newState.channelId);
+                if (targetChannel?.joinable) {
+                    await this.distube.voices.join(targetChannel).catch(() => undefined);
+                    await murphy.claimSession(guild.id, session.ownerId, targetChannel.id, this.client);
+                    const currentSong = this.getQueue(guild.id)?.songs?.[0] || null;
+                    await murphy.clearVoiceStatus(this.client, oldState.channelId);
+                    await murphy.syncVoiceStatus(this.client, guild.id, targetChannel.id, currentSong);
+                }
+            }
+            return;
+        }
+
         // While a Session Owner holds the bot, never pause or leave on empty when the owner steps out.
         if (session?.ownerId) return;
 
@@ -640,16 +687,45 @@ class MusicManager {
     /**
      * Save every queue and disconnect cleanly (SIGINT/SIGTERM).
      */
+    clearSleepTimer(guildId) {
+        const state = this.state(guildId);
+        clearTimeout(state.sleep);
+        state.sleep = null;
+        state.sleepEndsAt = null;
+    }
+
+    setSleepTimer(guildId, ms) {
+        const state = this.state(guildId);
+        this.clearSleepTimer(guildId);
+        state.sleepEndsAt = Date.now() + ms;
+        state.sleep = setTimeout(async () => {
+            state.sleep = null;
+            state.sleepEndsAt = null;
+            const queue = this.getQueue(guildId);
+            await murphy.setAfk(guildId, { enabled: false }, this.client);
+            if (queue) {
+                await this.endPanel(guildId, { titleKey: 'musicmanager.playback_ended' });
+                await queue.stop().catch(() => undefined);
+            }
+            await murphy.clearSession(guildId, this.client);
+            this.distube.voices.leave(guildId);
+        }, ms);
+        state.sleep.unref?.();
+        return state.sleepEndsAt;
+    }
+
     async shutdown() {
         await this.saveAllSessions();
         await murphy.removeClusterState(this.client);
         this.shuttingDown = true;
         clearInterval(this.saveTimer);
+        clearInterval(this.statsTimer);
         await this.sessions.drain();
         for (const state of this.guilds.values()) {
             clearTimeout(state.debounce);
             clearTimeout(state.leave);
             clearTimeout(state.empty);
+            clearTimeout(state.sleep);
             clearInterval(state.refresh);
         }
         for (const voice of [...this.distube.voices.collection.values()]) {
@@ -667,7 +743,10 @@ class MusicManager {
         const d = this.distube;
 
         d.on(DisTubeEvents.INIT_QUEUE, (queue) => {
-            queue.volume = config.bot.defaultVolume;
+            const session = murphy.getSession(queue.id);
+            const isVip = session?.ownerId && murphy.isPremiumUser(session.ownerId);
+            const prefs = isVip ? vip.getVipPrefs(session.ownerId) : null;
+            queue.volume = Number.isInteger(prefs?.defaultVolume) ? prefs.defaultVolume : config.bot.defaultVolume;
             this.#clearLeave(this.state(queue.id));
         });
 
@@ -684,6 +763,11 @@ class MusicManager {
             this.#startRefresh(queue);
             this.prefetchNext(queue);
             murphy.syncVoiceStatus(this.client, queue.id, queue.voiceChannel?.id, song);
+            const requesterId = (song?.user && !song.user.bot ? song.user.id : null) || murphy.getSession(queue.id)?.ownerId;
+            if (requesterId) {
+                vip.addHistory(requesterId, song).catch(() => undefined);
+                vip.incrementPlayCount(requesterId).catch(() => undefined);
+            }
             if (!this.shuttingDown) this.sessions.save(queue);
         });
 
