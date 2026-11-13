@@ -87,9 +87,9 @@ function toggleAutoplay(queue, t) {
     return result(true, enabled ? t('buttons.autoplay_on') : t('buttons.autoplay_off'));
 }
 
-function setVolume(queue, t, value) {
+function setVolume(queue, t, value, { maxVolume = config.bot.maxVolume } = {}) {
     const volume = Number(value);
-    if (!Number.isInteger(volume) || volume < 0 || volume > config.bot.maxVolume) {
+    if (!Number.isInteger(volume) || volume < 0 || volume > maxVolume) {
         return result(false, t('modalhandler.invalid_volume'));
     }
     queue.setVolume(volume);

@@ -3,6 +3,7 @@
 const { PermissionFlagsBits } = require('discord.js');
 const { command } = require('./_shared');
 const { say } = require('../handlers/guards');
+const murphy = require('../murphy');
 const {
     getServerPrefix,
     setServerPrefix,
@@ -113,6 +114,9 @@ module.exports = {
         }
 
         if (personalArg) {
+            if (!murphy.isPremiumUser(userId) && !RESET_WORDS.has(personalArg.toLowerCase())) {
+                return say(interaction, murphy.premiumRequiredMessage(t.lang, 'Personal Prefix'));
+            }
             if (RESET_WORDS.has(personalArg.toLowerCase())) {
                 await setUserPrefix(userId, null);
                 return say(interaction, msg.userReset);

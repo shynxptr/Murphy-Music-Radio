@@ -9,6 +9,7 @@ const {
     TextInputStyle,
 } = require('discord.js');
 const i18n = require('../core/i18n');
+const murphy = require('../murphy');
 const actions = require('../music/actions');
 const views = require('../ui/views');
 const { checkVoice, say, IGNORED_CODES } = require('./guards');
@@ -78,6 +79,12 @@ async function handlePanel(interaction, ctx) {
         case ID.autoplay:
         case ID.shuffle:
         case ID.filter: {
+            if (interaction.customId === ID.autoplay && !murphy.isPremiumUser(interaction.user.id)) {
+                return say(interaction, murphy.premiumRequiredMessage(t.lang, 'Autoplay'));
+            }
+            if (interaction.customId === ID.filter && interaction.values?.[0] !== 'none' && !murphy.isPremiumUser(interaction.user.id)) {
+                return say(interaction, murphy.premiumRequiredMessage(t.lang, 'Audio Filters'));
+            }
             const outcome = await run(() => {
                 if (interaction.customId === ID.pause) return actions.togglePause(queue, t);
                 if (interaction.customId === ID.loop) return actions.setLoop(queue, t);
@@ -109,7 +116,12 @@ async function handleVolumeModal(interaction, { t, manager }) {
     const check = checkVoice(interaction, manager, t);
     if (check.error) return say(interaction, check.error);
     const value = interaction.fields.getTextInputValue(ID.volumeInput).trim();
-    const outcome = actions.setVolume(check.queue, t, /^\d+$/.test(value) ? Number(value) : NaN);
+    const numeric = /^\d+$/.test(value) ? Number(value) : NaN;
+    const limits = murphy.getUserLimits(interaction.user.id);
+    if (Number.isInteger(numeric) && numeric > limits.maxVolume && !murphy.isPremiumUser(interaction.user.id)) {
+        return say(interaction, murphy.premiumRequiredMessage(t.lang, 'Volume Boost (101% – 150%)'));
+    }
+    const outcome = actions.setVolume(check.queue, t, numeric, { maxVolume: limits.maxVolume });
     if (!outcome.ok) return say(interaction, outcome.message);
     if (interaction.isFromMessage() && manager.isCurrentPanel(check.queue.id, interaction.message.id)) {
         return updatePanel(interaction, manager, check.queue);

@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('node:path');
+const crypto = require('node:crypto');
 const config = require('./config');
 const { JsonStore } = require('./core/store');
 const { truncate } = require('./core/format');
@@ -13,6 +14,18 @@ const DEFAULT_COLOR = '#1E3A8A';
 const DEFAULT_STATUS = `Serving Murphy · ${TAGLINE}`;
 const DEFAULT_VOICE_TEMPLATE = 'Listening to {song}';
 const MAX_FAVORITES = 100;
+const FREE_LIMITS = {
+    maxQueueSize: 25,
+    maxPlaylistSize: 20,
+    maxFavorites: 10,
+    maxVolume: 100,
+};
+const PREMIUM_LIMITS = {
+    maxQueueSize: config.bot.maxQueueSize || 500,
+    maxPlaylistSize: config.bot.maxPlaylistSize || 200,
+    maxFavorites: MAX_FAVORITES,
+    maxVolume: 150,
+};
 const MAX_ALLOWED_USERS = 50;
 const CLUSTER_STALE_MS = 45_000;
 
@@ -21,9 +34,11 @@ let sessionOwnerStore = null;
 let voiceStatusStore = null;
 let favoritesStore = null;
 let clusterStore = null;
+let premiumStore = null;
+let voucherStore = null;
 
 /**
- * Shared directory across multiple bot instances (Murphy 1–5) running from the same repo.
+ * Shared directory across multiple bot instances (Murphy 1–20) running from the same repo.
  * Falls back to `config.dataDir` during isolated unit tests when DATA_DIR points to a temp directory.
  */
 function sharedDataDir() {
@@ -40,6 +55,8 @@ const sessionOwners = () => (sessionOwnerStore ??= new JsonStore(path.join(confi
 const voiceStatuses = () => (voiceStatusStore ??= new JsonStore(path.join(sharedDataDir(), 'murphy', 'voicestatus'), { shared: true }));
 const favorites = () => (favoritesStore ??= new JsonStore(path.join(sharedDataDir(), 'murphy', 'favorites'), { shared: true }));
 const cluster = () => (clusterStore ??= new JsonStore(path.join(sharedDataDir(), 'murphy', 'cluster'), { shared: true }));
+const premiums = () => (premiumStore ??= new JsonStore(path.join(sharedDataDir(), 'murphy', 'premium'), { shared: true }));
+const vouchers = () => (voucherStore ??= new JsonStore(path.join(sharedDataDir(), 'murphy', 'vouchers'), { shared: true }));
 
 function resetMurphyStores() {
     afkStore = null;
@@ -47,6 +64,232 @@ function resetMurphyStores() {
     voiceStatusStore = null;
     favoritesStore = null;
     clusterStore = null;
+    premiumStore = null;
+    voucherStore = null;
+}
+
+// ─── Murphy Premium (User-Based) & Vouchers ──────────────────────────
+
+function isPremiumBot() {
+    return config.bot.tier === 'premium';
+}
+
+function isBotOwner(userId) {
+    if (!userId) return false;
+    return Array.isArray(config.bot.ownerIds) && config.bot.ownerIds.includes(String(userId));
+}
+
+function parseDuration(input) {
+    const raw = String(input ?? '').trim().toLowerCase();
+    if (!raw) return null;
+    if (['lifetime', 'perm', 'permanent', 'forever', 'selamanya'].includes(raw)) {
+        return { lifetime: true, ms: null, label: 'Lifetime' };
+    }
+    const match = raw.match(/^(\d+)\s*(d|day|days|hari|h|hr|hour|hours|jam|w|week|weeks|minggu|m|mo|month|months|bulan|y|yr|year|years|tahun)$/i);
+    if (!match) return null;
+    const n = Number.parseInt(match[1], 10);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const unit = match[2].toLowerCase();
+    let mult = 86_400_000;
+    let labelUnit = 'd';
+    if (unit.startsWith('h') || unit === 'jam') {
+        mult = 3_600_000;
+        labelUnit = 'h';
+    } else if (unit.startsWith('w') || unit === 'minggu') {
+        mult = 7 * 86_400_000;
+        labelUnit = 'w';
+    } else if (unit === 'm' || unit.startsWith('mo') || unit === 'bulan') {
+        mult = 30 * 86_400_000;
+        labelUnit = 'mo';
+    } else if (unit.startsWith('y') || unit === 'tahun') {
+        mult = 365 * 86_400_000;
+        labelUnit = 'y';
+    }
+    return { lifetime: false, ms: n * mult, label: `${n}${labelUnit}` };
+}
+
+function getPremium(userId) {
+    if (!userId) return null;
+    const id = String(userId);
+    const data = premiums().get(id);
+    if (!data) return null;
+    if (!data.lifetime && (!data.expiresAt || Date.now() >= data.expiresAt)) {
+        return null;
+    }
+    return data;
+}
+
+function isPremiumUser(userId) {
+    if (!userId) return false;
+    return Boolean(getPremium(userId));
+}
+
+function getUserLimits(userId) {
+    return isPremiumUser(userId) ? PREMIUM_LIMITS : FREE_LIMITS;
+}
+
+async function grantPremium(userId, durationInput = '30d', { grantedBy = null, note = '' } = {}) {
+    const id = String(userId);
+    const parsed = typeof durationInput === 'object' && durationInput !== null
+        ? durationInput
+        : parseDuration(durationInput);
+    if (!parsed) throw new Error('INVALID_DURATION');
+
+    const now = Date.now();
+    const existing = getPremium(id);
+    let expiresAt = null;
+    let lifetime = Boolean(parsed.lifetime);
+
+    if (!lifetime) {
+        if (existing?.lifetime) {
+            lifetime = true;
+        } else {
+            const base = existing?.expiresAt && existing.expiresAt > now ? existing.expiresAt : now;
+            expiresAt = base + parsed.ms;
+        }
+    }
+
+    const record = {
+        userId: id,
+        lifetime,
+        expiresAt,
+        grantedBy: grantedBy ? String(grantedBy) : (existing?.grantedBy || null),
+        grantedAt: existing?.grantedAt || now,
+        updatedAt: now,
+        note: note || existing?.note || '',
+    };
+    await premiums().set(id, record);
+    return record;
+}
+
+async function revokePremium(userId) {
+    const id = String(userId);
+    const existing = premiums().get(id);
+    await premiums().delete(id);
+    return Boolean(existing);
+}
+
+function listPremiumUsers() {
+    const list = [];
+    for (const key of premiums().keys()) {
+        const record = getPremium(key);
+        if (record) list.push(record);
+    }
+    list.sort((a, b) => (b.lifetime ? Infinity : b.expiresAt) - (a.lifetime ? Infinity : a.expiresAt));
+    return list;
+}
+
+function randomCode() {
+    const part = () => crypto.randomBytes(2).toString('hex').toUpperCase();
+    return `MURPHY-${part()}-${part()}`;
+}
+
+async function generateVouchers(durationInput = '30d', count = 1, { createdBy = null, note = '' } = {}) {
+    const parsed = parseDuration(durationInput);
+    if (!parsed) throw new Error('INVALID_DURATION');
+    const safeCount = Math.min(20, Math.max(1, Number.parseInt(count, 10) || 1));
+    const created = [];
+    for (let i = 0; i < safeCount; i++) {
+        let code = randomCode();
+        while (vouchers().get(code)) code = randomCode();
+        const record = {
+            code,
+            duration: parsed.label,
+            lifetime: parsed.lifetime,
+            ms: parsed.ms,
+            createdBy: createdBy ? String(createdBy) : null,
+            createdAt: Date.now(),
+            redeemedBy: null,
+            redeemedAt: null,
+            note,
+        };
+        await vouchers().set(code, record);
+        created.push(record);
+    }
+    return created;
+}
+
+async function redeemVoucher(rawCode, userId) {
+    const code = String(rawCode ?? '').trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{4,64}$/.test(code)) return { ok: false, reason: 'invalid' };
+    const record = vouchers().get(code);
+    if (!record) return { ok: false, reason: 'not_found' };
+    if (record.redeemedBy) return { ok: false, reason: 'already_used', voucher: record };
+
+    const granted = await grantPremium(userId, { lifetime: record.lifetime, ms: record.ms, label: record.duration }, {
+        grantedBy: record.createdBy,
+        note: `Voucher ${code}`,
+    });
+    await vouchers().set(code, {
+        ...record,
+        redeemedBy: String(userId),
+        redeemedAt: Date.now(),
+    });
+    return { ok: true, voucher: record, premium: granted };
+}
+
+function formatRemaining(lang, premiumRecord) {
+    if (!premiumRecord) return '-';
+    if (premiumRecord.lifetime) return lang === 'id' ? 'Selamanya (Lifetime)' : 'Lifetime';
+    const diff = Math.max(0, premiumRecord.expiresAt - Date.now());
+    const days = Math.floor(diff / 86_400_000);
+    const hours = Math.floor((diff % 86_400_000) / 3_600_000);
+    if (lang === 'id') {
+        return days > 0 ? `${days} hari ${hours} jam` : `${hours} jam`;
+    }
+    return days > 0 ? `${days}d ${hours}h` : `${hours}h`;
+}
+
+function premiumRequiredMessage(lang, featureName = null) {
+    if (lang === 'id') {
+        const title = featureName
+            ? `### 💎 Fitur Khusus Murphy Premium: ${featureName}`
+            : '### 💎 Fitur Khusus Murphy Premium';
+        return [
+            title,
+            'Fitur ini hanya tersedia untuk pelanggan **Murphy Premium** (akses VIP **Murphy #6–#20**).',
+            '',
+            '**Keuntungan Murphy Premium:**',
+            '• Akses 15 Bot VIP (**Murphy #6–#20**) anti-penuh & anti-antri',
+            '• Mode **24/7 AFK** (`f!afk`), Queue **500** lagu, Playlist **200** lagu, Volume s/d **150%**',
+            '• Semua **Audio Filter** (`slowed`, `lofi`, `8D`, `bassboost`, dll.) & **Autoplay**',
+            '• **Personal Prefix** (`f!prefix d`), **Custom Voice Status** (`f!vs`), & **100** Favorit',
+            '',
+            'Sudah punya kode voucher? Ketik **`f!redeem <kode>`** atau cek **`f!premium`**.',
+            `-# ${FOOTER}`,
+        ].join('\n');
+    }
+    const title = featureName
+        ? `### 💎 Murphy Premium Feature: ${featureName}`
+        : '### 💎 Murphy Premium Feature';
+    return [
+        title,
+        'This feature is exclusive to **Murphy Premium** subscribers (**Murphy #6–#20** VIP pool).',
+        '',
+        '**Murphy Premium Perks:**',
+        '• Exclusive access to 15 VIP bots (**Murphy #6–#20**)',
+        '• **24/7 AFK** (`f!afk`), **500** queue limit, **200** playlist import, **150%** volume boost',
+        '• All **Audio Filters** (`slowed`, `lofi`, `8D`, `bassboost`, etc.) & **Autoplay**',
+        '• **Personal Prefix** (`f!prefix d`), **Custom Voice Status** (`f!vs`), & **100** Favorites',
+        '',
+        'Have a voucher code? Run **`f!redeem <code>`** or check **`f!premium`**.',
+        `-# ${FOOTER}`,
+    ].join('\n');
+}
+
+function allFreeBotsBusyMessage(lang) {
+    if (lang === 'id') {
+        return [
+            '⚠️ Semua bot gratis (**Murphy #1–#5**) saat ini sedang digunakan di voice channel lain!',
+            '💎 Upgrade ke **Murphy Premium** untuk akses instan ke 15 bot VIP (**Murphy #6–#20**) tanpa antri. Cek `f!premium`.',
+            `-# ${FOOTER}`,
+        ].join('\n');
+    }
+    return [
+        '⚠️ All free bots (**Murphy #1–#5**) are currently busy in other voice channels!',
+        '💎 Upgrade to **Murphy Premium** for instant access to 15 VIP bots (**Murphy #6–#20**). Check `f!premium`.',
+        `-# ${FOOTER}`,
+    ].join('\n');
 }
 
 // ─── Session Owner & Access Lock (1 Bot = 1 Owner = 1 Voice) ───────────
@@ -212,6 +455,7 @@ async function syncClusterState(client) {
             botId: String(botId),
             tag: client.user.tag || BRAND_NAME,
             priority: config.bot.priority || 1,
+            tier: config.bot.tier || 'free',
             updatedAt: Date.now(),
             guilds: collectClientGuildStates(client),
         });
@@ -255,6 +499,7 @@ function getClusterBotsForGuild(guild) {
         result.push({
             botId: String(data.botId),
             priority: Number(data.priority) || 1,
+            tier: data.tier === 'premium' ? 'premium' : 'free',
             channelId: liveChannelId || guildState.channelId || null,
             ownerId: guildState.ownerId || null,
             allowedIds: Array.isArray(guildState.allowedIds) ? guildState.allowedIds : [],
@@ -273,6 +518,7 @@ function getClusterBotsForGuild(guild) {
         result.push({
             botId: String(myBotId),
             priority: config.bot.priority || 1,
+            tier: config.bot.tier || 'free',
             channelId: myChannelId,
             ownerId: mySession?.ownerId || null,
             allowedIds: mySession?.allowedIds || [],
@@ -294,7 +540,7 @@ function isSummonCommand(commandName, rawArgs) {
 }
 
 function isGlobalNonVoiceCommand(commandName, rawArgs) {
-    if (['help', 'prefix', 'language'].includes(commandName)) return true;
+    if (['help', 'prefix', 'language', 'premium', 'redeem', 'prem'].includes(commandName)) return true;
     if (commandName === 'favorite') {
         const trimmed = String(rawArgs ?? '').trim();
         if (!trimmed) return true; // list
@@ -308,19 +554,21 @@ function isGlobalNonVoiceCommand(commandName, rawArgs) {
 
 /**
  * Decide whether this bot instance should respond to a prefix command when multiple
- * Murphy bots (Murphy 1–5) share the same guild and prefix.
+ * Murphy bots (Murphy 1–20) share the same guild and prefix.
  */
 function routePrefixCommand(message, { prefix, commandName, rawArgs }) {
-    if (prefix === '@bot ') return { shouldHandle: true, allBusy: false };
+    if (prefix === '@bot ') return { shouldHandle: true, allBusy: false, allFreeBusy: false };
     const guild = message.guild;
     const myBotId = message.client?.user?.id;
-    if (!guild || !myBotId) return { shouldHandle: true, allBusy: false };
+    if (!guild || !myBotId) return { shouldHandle: true, allBusy: false, allFreeBusy: false };
 
     const bots = getClusterBotsForGuild(guild);
-    if (bots.length <= 1) return { shouldHandle: true, allBusy: false };
+    if (bots.length <= 1) return { shouldHandle: true, allBusy: false, allFreeBusy: false };
 
     const primaryBot = bots[0];
+    const primaryFreeBot = bots.find((b) => b.tier !== 'premium') || primaryBot;
     const userId = String(message.author.id);
+    const userIsPremium = isPremiumUser(userId);
     const userChannelId = message.member?.voice?.channelId || null;
     const botInUserChannel = userChannelId ? bots.find((b) => b.channelId === userChannelId) : null;
     const botOwnedByUser = bots.find((b) => b.ownerId === userId);
@@ -328,36 +576,45 @@ function routePrefixCommand(message, { prefix, commandName, rawArgs }) {
 
     if (isGlobalNonVoiceCommand(commandName, rawArgs)) {
         const target = botInUserChannel || botOwnedByUser || primaryBot;
-        return { shouldHandle: target.botId === String(myBotId), allBusy: false };
+        return { shouldHandle: target.botId === String(myBotId), allBusy: false, allFreeBusy: false };
     }
 
     // 1) If there is already a Murphy bot in the user's voice channel, only that bot responds.
     if (botInUserChannel) {
-        return { shouldHandle: botInUserChannel.botId === String(myBotId), allBusy: false };
+        return { shouldHandle: botInUserChannel.botId === String(myBotId), allBusy: false, allFreeBusy: false };
     }
 
     // 2) If the user already owns a session on a Murphy bot (even if they stepped out of VC or moved to another VC),
     //    only their owned bot responds (enforcing 1 bot = 1 owner and allowing remote control/stop).
     if (botOwnedByUser) {
-        return { shouldHandle: botOwnedByUser.botId === String(myBotId), allBusy: false };
+        return { shouldHandle: botOwnedByUser.botId === String(myBotId), allBusy: false, allFreeBusy: false };
     }
 
     // 3) If the user is not in a VC and is an allowed user on an active bot session, route to that bot.
     if (!userChannelId && botAllowedForUser) {
-        return { shouldHandle: botAllowedForUser.botId === String(myBotId), allBusy: false };
+        return { shouldHandle: botAllowedForUser.botId === String(myBotId), allBusy: false, allFreeBusy: false };
     }
 
     // 4) User is in a VC with no Murphy bot yet and does not own any bot yet:
     if (userChannelId && isSummonCommand(commandName, rawArgs)) {
         const idleBots = bots.filter((b) => !b.channelId && !b.ownerId);
-        if (idleBots.length > 0) {
-            return { shouldHandle: idleBots[0].botId === String(myBotId), allBusy: false };
+        if (userIsPremium) {
+            const idleVip = idleBots.filter((b) => b.tier === 'premium');
+            const chosen = idleVip[0] || idleBots[0] || null;
+            if (chosen) {
+                return { shouldHandle: chosen.botId === String(myBotId), allBusy: false, allFreeBusy: false };
+            }
+            return { shouldHandle: primaryBot.botId === String(myBotId), allBusy: true, allFreeBusy: false };
         }
-        return { shouldHandle: primaryBot.botId === String(myBotId), allBusy: true };
+        const idleFree = idleBots.filter((b) => b.tier !== 'premium');
+        if (idleFree.length > 0) {
+            return { shouldHandle: idleFree[0].botId === String(myBotId), allBusy: false, allFreeBusy: false };
+        }
+        return { shouldHandle: primaryFreeBot.botId === String(myBotId), allBusy: false, allFreeBusy: true };
     }
 
     // 5) Fallback (e.g. non-summon command in an empty VC): only the primary bot responds.
-    return { shouldHandle: primaryBot.botId === String(myBotId), allBusy: false };
+    return { shouldHandle: primaryBot.botId === String(myBotId), allBusy: false, allFreeBusy: false };
 }
 
 // ─── 24/7 AFK Mode ─────────────────────────────────────────────────────
@@ -470,11 +727,12 @@ function getFavorites(userId) {
 async function addFavorite(userId, songData) {
     const id = String(userId);
     const list = [...getFavorites(id)];
+    const limit = getUserLimits(id).maxFavorites;
     if (list.some((item) => item.url === songData.url)) {
-        return { added: false, reason: 'duplicate', list };
+        return { added: false, reason: 'duplicate', list, limit };
     }
-    if (list.length >= MAX_FAVORITES) {
-        return { added: false, reason: 'full', list };
+    if (list.length >= limit) {
+        return { added: false, reason: 'full', list, limit };
     }
     const entry = {
         plugin: songData.plugin || 'youtube',
@@ -521,8 +779,24 @@ module.exports = {
     DEFAULT_STATUS,
     DEFAULT_VOICE_TEMPLATE,
     MAX_FAVORITES,
+    FREE_LIMITS,
+    PREMIUM_LIMITS,
     MAX_ALLOWED_USERS,
     sharedDataDir,
+    isPremiumBot,
+    isBotOwner,
+    parseDuration,
+    getPremium,
+    isPremiumUser,
+    getUserLimits,
+    grantPremium,
+    revokePremium,
+    listPremiumUsers,
+    generateVouchers,
+    redeemVoucher,
+    formatRemaining,
+    premiumRequiredMessage,
+    allFreeBotsBusyMessage,
     getSession,
     isSessionOwner,
     isSessionAuthorized,

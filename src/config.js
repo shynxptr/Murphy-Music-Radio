@@ -60,6 +60,9 @@ const config = {
 
     bot: {
         priority: int('BOT_PRIORITY', 1, { min: 1, max: 100 }),
+        tier: env('BOT_TIER', 'free').toLowerCase() === 'premium' ? 'premium' : 'free',
+        premiumStart: int('PREMIUM_START', 6, { min: 2, max: 50 }),
+        ownerIds: list('BOT_OWNER_ID'),
         status: env('STATUS', 'Serving Murphy · Together Around the World'),
         defaultPrefix: env('DEFAULT_PREFIX', 'f!'),
         messageContentIntent: bool('MESSAGE_CONTENT_INTENT', true),

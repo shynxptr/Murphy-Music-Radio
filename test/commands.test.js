@@ -11,7 +11,7 @@ const locales = new Set(Object.values(Locale));
 
 test('all commands serialize and respect Discord limits', () => {
     const bodies = commandBodies();
-    assert.equal(bodies.length, 28);
+    assert.equal(bodies.length, 31);
     const names = new Set();
     for (const body of bodies) {
         assert.match(body.name, /^[a-z0-9_-]{1,32}$/);
@@ -272,4 +272,73 @@ test('Multi-bot cluster routing assigns 1 idle bot per voice channel and 1 bot p
     // User 1 (who already owns bot1 in vc1) tries to call f!p from vc3 -> routed back to bot1 (cannot claim bot2!)
     assert.equal(murphy.routePrefixCommand(makeMsg('bot1', 'u1', 'vc3', 'f!p Hindia'), parsedPlay).shouldHandle, true);
     assert.equal(murphy.routePrefixCommand(makeMsg('bot2', 'u1', 'vc3', 'f!p Hindia'), parsedPlay).shouldHandle, false);
+});
+
+test('Murphy Premium licenses, vouchers, limits, and free (#1-5) vs VIP (#6-20) routing', async () => {
+    const murphy = require('../src/murphy');
+    const config = require('../src/config');
+    const { parsePrefixCommand } = require('../src/handlers/prefix');
+    murphy.resetMurphyStores();
+
+    // Free user limits
+    assert.equal(murphy.isPremiumUser('freeUser'), false);
+    assert.deepEqual(murphy.getUserLimits('freeUser'), murphy.FREE_LIMITS);
+
+    // Grant Premium via voucher
+    const [voucher] = await murphy.generateVouchers('30d', 1, { createdBy: 'owner1' });
+    assert.match(voucher.code, /^MURPHY-[A-F0-9]{4}-[A-F0-9]{4}$/);
+
+    const redeemed = await murphy.redeemVoucher(voucher.code, 'vipUser');
+    assert.equal(redeemed.ok, true);
+    assert.equal(murphy.isPremiumUser('vipUser'), true);
+    assert.deepEqual(murphy.getUserLimits('vipUser'), murphy.PREMIUM_LIMITS);
+
+    // Reusing the same voucher fails
+    const reuse = await murphy.redeemVoucher(voucher.code, 'otherUser');
+    assert.equal(reuse.ok, false);
+    assert.equal(reuse.reason, 'already_used');
+
+    // Tier-aware cluster routing: free bot1 (priority 1, tier free) and vip bot6 (priority 6, tier premium)
+    const prevPriority = config.bot.priority;
+    const prevTier = config.bot.tier;
+    const makeClient = (botId, priority, tier) => {
+        config.bot.priority = priority;
+        config.bot.tier = tier;
+        return {
+            user: { id: botId, tag: `Murphy#${priority}` },
+            guilds: { cache: new Map([['901', { id: '901', members: { me: { voice: { channelId: null } } } }]]) },
+            music: { getQueue: () => null },
+        };
+    };
+
+    await murphy.syncClusterState(makeClient('botFree1', 1, 'free'));
+    await murphy.syncClusterState(makeClient('botVip6', 6, 'premium'));
+    config.bot.priority = prevPriority;
+    config.bot.tier = prevTier;
+
+    const makeMsg = (botId, userId, voiceChannelId) => ({
+        content: 'f!p Hindia',
+        author: { id: userId, bot: false },
+        member: { id: userId, voice: { channelId: voiceChannelId } },
+        client: { user: { id: botId } },
+        guild: {
+            id: '901',
+            client: { user: { id: botId } },
+            members: { cache: new Map([['botFree1', {}], ['botVip6', {}]]) },
+            voiceStates: { cache: new Map() },
+        },
+    });
+    const parsedPlay = parsePrefixCommand('f!p Hindia');
+
+    // VIP user gets routed directly to VIP bot #6 even though Free bot #1 is also idle
+    assert.equal(murphy.routePrefixCommand(makeMsg('botFree1', 'vipUser', 'vc10'), parsedPlay).shouldHandle, false);
+    assert.equal(murphy.routePrefixCommand(makeMsg('botVip6', 'vipUser', 'vc10'), parsedPlay).shouldHandle, true);
+
+    // Free user gets routed only to Free bot #1
+    assert.equal(murphy.routePrefixCommand(makeMsg('botFree1', 'freeUser', 'vc11'), parsedPlay).shouldHandle, true);
+    assert.equal(murphy.routePrefixCommand(makeMsg('botVip6', 'freeUser', 'vc11'), parsedPlay).shouldHandle, false);
+
+    // Revoke premium works
+    assert.equal(await murphy.revokePremium('vipUser'), true);
+    assert.equal(murphy.isPremiumUser('vipUser'), false);
 });

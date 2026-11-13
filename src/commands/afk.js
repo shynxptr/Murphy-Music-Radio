@@ -57,6 +57,10 @@ module.exports = {
         const check = checkVoice(interaction, manager, t, { requireQueue: false, join: true });
         if (check.error) return say(interaction, check.error);
 
+        if (!murphy.isPremiumUser(interaction.user.id)) {
+            return say(interaction, murphy.premiumRequiredMessage(t.lang, '24/7 AFK'));
+        }
+
         if (interaction.user?.id && check.channel?.id) {
             await murphy.claimSession(guildId, interaction.user.id, check.channel.id, interaction.client);
         }

@@ -140,6 +140,7 @@ class MusicManager {
             afk: murphy.isAfk(queue.id),
             sessionOwnerId: session?.ownerId || null,
             sessionAllowedCount: Array.isArray(session?.allowedIds) ? session.allowedIds.length : 0,
+            sessionIsPremium: Boolean(session?.ownerId && murphy.isPremiumUser(session.ownerId)),
             upcoming,
             upcomingDuration: upcoming.reduce((sum, song) => sum + (song.duration || 0), 0),
         };
@@ -169,7 +170,10 @@ class MusicManager {
      */
     async play({ voiceChannel, textChannel, member, query, position = 0, onQueued = null }) {
         const guildId = voiceChannel.guild.id;
-        if (this.#remaining(guildId) <= 0) throw this.#queueFull();
+        const sessionOwnerId = murphy.getSession(guildId)?.ownerId || member?.id;
+        const limits = murphy.getUserLimits(sessionOwnerId);
+        const maxQueue = Math.min(config.bot.maxQueueSize, limits.maxQueueSize);
+        if (this.#remaining(guildId, maxQueue) <= 0) throw this.#queueFull(maxQueue);
 
         const requestedAt = Date.now();
         const metadata = { requesterId: member.id, guildId };
@@ -194,11 +198,12 @@ class MusicManager {
         // Adding to the queue is serialized per guild: two /play commands at the same moment
         // must not both create a queue (DisTube registers a new queue only after joining).
         return this.#withPlayLock(guildId, async () => {
-            const capacity = this.#remaining(guildId);
-            if (capacity <= 0) throw this.#queueFull();
+            const capacity = this.#remaining(guildId, maxQueue);
+            if (capacity <= 0) throw this.#queueFull(maxQueue);
             let truncated = false;
-            if (resolved instanceof Playlist && resolved.songs.length > capacity) {
-                resolved.songs = resolved.songs.slice(0, capacity);
+            const maxAllowed = Math.min(capacity, limits.maxPlaylistSize);
+            if (resolved instanceof Playlist && resolved.songs.length > maxAllowed) {
+                resolved.songs = resolved.songs.slice(0, maxAllowed);
                 truncated = true;
             }
             const queue = this.getQueue(guildId);
@@ -230,12 +235,12 @@ class MusicManager {
         });
     }
 
-    #remaining(guildId) {
-        return config.bot.maxQueueSize - (this.getQueue(guildId)?.songs.length || 0);
+    #remaining(guildId, maxQueue = config.bot.maxQueueSize) {
+        return maxQueue - (this.getQueue(guildId)?.songs.length || 0);
     }
 
-    #queueFull() {
-        return new DisTubeError('QUEUE_FULL', `Queue is full (${config.bot.maxQueueSize})`);
+    #queueFull(maxQueue = config.bot.maxQueueSize) {
+        return new DisTubeError('QUEUE_FULL', `Queue is full (${maxQueue})`);
     }
 
     #withPlayLock(guildId, task) {

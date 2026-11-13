@@ -112,14 +112,16 @@ function requesterLine(t, song) {
 function playerPanel(t, state) {
     const {
         song, paused, currentTime = 0, volume, repeatMode = 0, autoplay = false, filter = null,
-        afk = false, sessionOwnerId = null, sessionAllowedCount = 0, upcoming = [], upcomingDuration = 0,
+        afk = false, sessionOwnerId = null, sessionAllowedCount = 0, sessionIsPremium = false,
+        upcoming = [], upcomingDuration = 0,
     } = state;
     const c = container();
 
     const status = paused ? t('commands.nowplaying.status_paused') : t('commands.nowplaying.title');
     const meta = [song.uploader?.name ? escapeMarkdown(truncate(song.uploader.name, 60)) : null,
         song.isLive ? t('ui.live') : formatDuration(song.duration)].filter(Boolean).join(' · ');
-    headline(c, `-# ${murphy.BRAND_NAME} · ${status}\n### ${link(song.name, song.url, 90)}\n${meta}`, song.thumbnail);
+    const headerBrand = sessionIsPremium ? `💎 ${murphy.BRAND_NAME} VIP` : murphy.BRAND_NAME;
+    headline(c, `-# ${headerBrand} · ${status}\n### ${link(song.name, song.url, 90)}\n${meta}`, song.thumbnail);
 
     if (!song.isLive && song.duration > 0) {
         const position = Math.min(currentTime, song.duration);

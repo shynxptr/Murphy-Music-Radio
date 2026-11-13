@@ -25,15 +25,18 @@ function decodeClientIdFromToken(token) {
 
 function collectExtraBotConfigs() {
     const extras = [];
-    for (let i = 2; i <= 10; i++) {
+    const premiumStart = config.bot.premiumStart || 6;
+    for (let i = 2; i <= 20; i++) {
         const token = (process.env[`DISCORD_TOKEN_${i}`] || '').trim();
         if (!token) continue;
         const clientId = (process.env[`CLIENT_ID_${i}`] || '').trim() || decodeClientIdFromToken(token);
-        const status = (process.env[`STATUS_${i}`] || '').trim() || config.bot.status;
+        const tier = (process.env[`BOT_TIER_${i}`] || '').trim() || (i >= premiumStart ? 'premium' : 'free');
+        const status = (process.env[`STATUS_${i}`] || '').trim() || (tier === 'premium' ? `Murphy VIP #${i} · Together Around the World` : config.bot.status);
         extras.push({
             index: i,
             token,
             clientId,
+            tier,
             status,
             priority: String(i),
             dataDir: path.join('data', `bot${i}`),
@@ -48,13 +51,14 @@ function spawnExtraBots(extras, isStopping) {
 
     const launch = (botCfg) => {
         if (isStopping()) return;
-        log.info(`Launching Murphy #${botCfg.index} (priority ${botCfg.priority})`);
+        log.info(`Launching Murphy #${botCfg.index} (${botCfg.tier}, priority ${botCfg.priority})`);
         const child = fork(botScript, [], {
             env: {
                 ...process.env,
                 DISCORD_TOKEN: botCfg.token,
                 CLIENT_ID: botCfg.clientId,
                 BOT_PRIORITY: botCfg.priority,
+                BOT_TIER: botCfg.tier,
                 DATA_DIR: botCfg.dataDir,
                 STATUS: botCfg.status,
                 MURPHY_EXTRA_BOT: '1',

@@ -104,6 +104,9 @@ const COMMAND_ALIASES = {
     favorite: ['favorite', 'fav', 'favs'],
     grab: ['grab', 'save', 'dm'],
     session: ['session', 'owner', 'allow', 'disallow', 'unallow', 'deny', 'transfer'],
+    premium: ['premium', 'vip', 'plan'],
+    redeem: ['redeem', 'claim'],
+    prem: ['prem'],
 };
 
 const ALIAS_TO_COMMAND = new Map();
@@ -235,6 +238,8 @@ function createOptions(commandName, alias, rawArgs) {
             if (commandName === 'session' && name === 'raw') return rawArgs;
             if (commandName === 'session' && name === 'alias') return alias;
             if (commandName === 'session') return null;
+            if (commandName === 'redeem' && name === 'code') return rawArgs;
+            if (commandName === 'prem' && name === 'raw') return rawArgs;
             return rawArgs || null;
         },
         getUser() {
@@ -356,7 +361,7 @@ async function onMessage(message) {
     try {
         if (!message?.guild || message.author?.bot || !message.content) return null;
 
-        const userPrefix = getUserPrefix(message.author.id);
+        const userPrefix = murphy.isPremiumUser(message.author.id) ? getUserPrefix(message.author.id) : null;
         const serverPrefix = getServerPrefix(message.guild.id);
         const parsed = parsePrefixCommand(message.content, {
             userPrefix,
@@ -376,6 +381,9 @@ async function onMessage(message) {
         const t = i18n.forGuild(message.guild);
         const ctx = { client: message.client, manager: message.client.music, t };
 
+        if (routing.allFreeBusy) {
+            return say(interaction, murphy.allFreeBotsBusyMessage(t.lang));
+        }
         if (routing.allBusy) {
             return say(interaction, murphy.allBotsBusyMessage(t.lang));
         }

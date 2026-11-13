@@ -10,7 +10,7 @@ const murphy = require('../murphy');
 function messages(lang) {
     if (lang === 'id') {
         return {
-            title: (count) => `### Lagu Favoritmu (${count}/${murphy.MAX_FAVORITES})`,
+            title: (count, limit) => `### Lagu Favoritmu (${count}/${limit})`,
             empty: [
                 'Daftar lagu favoritmu masih kosong!',
                 '',
@@ -25,7 +25,7 @@ function messages(lang) {
             noPlayingToAdd: 'Tidak ada lagu yang sedang diputar! Kamu juga bisa mengetik `f!fav add <judul lagu/link>`.',
             added: (title, pos) => `**${title}** berhasil disimpan ke daftar favoritmu (nomor **#${pos}**)!`,
             duplicate: (title) => `**${title}** sudah ada di dalam daftar favoritmu!`,
-            full: `Daftar favoritmu sudah penuh (maksimal ${murphy.MAX_FAVORITES} lagu). Hapus beberapa dengan \`f!fav remove <nomor>\`.`,
+            full: (limit) => `Daftar favoritmu sudah penuh (maksimal ${limit} lagu). Hapus beberapa dengan \`f!fav remove <nomor>\` atau upgrade ke Murphy Premium untuk 100 slot!`,
             removed: (title) => `**${title}** telah dihapus dari daftar favoritmu.`,
             invalidPos: (pos) => `Tidak ada lagu favorit di nomor **#${pos}**.`,
             cleared: 'Seluruh daftar lagu favoritmu telah dikosongkan.',
@@ -33,7 +33,7 @@ function messages(lang) {
         };
     }
     return {
-        title: (count) => `### Your Favorite Songs (${count}/${murphy.MAX_FAVORITES})`,
+        title: (count, limit) => `### Your Favorite Songs (${count}/${limit})`,
         empty: [
             'Your favorite songs list is empty!',
             '',
@@ -48,7 +48,7 @@ function messages(lang) {
         noPlayingToAdd: 'No song is currently playing! You can also type `f!fav add <song name or link>`.',
         added: (title, pos) => `**${title}** has been saved to your favorites (**#${pos}**)!`,
         duplicate: (title) => `**${title}** is already in your favorites!`,
-        full: `Your favorites list is full (max ${murphy.MAX_FAVORITES} songs). Remove some with \`f!fav remove <number>\`.`,
+        full: (limit) => `Your favorites list is full (max ${limit} songs). Remove some with \`f!fav remove <number>\` or upgrade to Murphy Premium for 100 slots!`,
         removed: (title) => `**${title}** has been removed from your favorites.`,
         invalidPos: (pos) => `There is no favorite song at position **#${pos}**.`,
         cleared: 'All your favorite songs have been cleared.',
@@ -139,7 +139,7 @@ module.exports = {
             const serialized = manager.sessions.serializeSong(songToSave);
             const outcome = await murphy.addFavorite(userId, serialized);
             if (!outcome.added) {
-                const reasonText = outcome.reason === 'duplicate' ? msg.duplicate(songToSave.name) : msg.full;
+                const reasonText = outcome.reason === 'duplicate' ? msg.duplicate(songToSave.name) : msg.full(outcome.limit);
                 return say(interaction, `${reasonText}\n-# ${murphy.FOOTER}`);
             }
             return say(interaction, `${msg.added(outcome.song.name, outcome.position)}\n-# ${murphy.FOOTER}`);
@@ -182,8 +182,9 @@ module.exports = {
             `\`${String(idx + 1).padStart(2, ' ')}.\` ${link(item.name, item.url, 65)} · ${item.isLive ? t('ui.live') : formatDuration(item.duration)}`);
         if (list.length > 20) lines.push(`-# ... +${list.length - 20}`);
 
+        const limit = murphy.getUserLimits(userId).maxFavorites;
         const content = [
-            msg.title(list.length),
+            msg.title(list.length, limit),
             lines.join('\n'),
             '',
             `-# Total: ${formatDuration(totalDuration)} · ${msg.footerHelp}`,

@@ -66,6 +66,10 @@ module.exports = {
             return say(interaction, msg.reset, { ephemeral: false });
         }
 
+        if (!murphy.isPremiumUser(interaction.user.id)) {
+            return say(interaction, murphy.premiumRequiredMessage(t.lang, 'Custom Voice Status'));
+        }
+
         await murphy.setVoiceTemplate(guildId, input);
         await murphy.syncVoiceStatus(interaction.client, guildId, voiceChannelId, currentSong);
         const preview = murphy.formatVoiceStatus(guildId, currentSong) || input;
