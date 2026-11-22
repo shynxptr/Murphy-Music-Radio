@@ -85,6 +85,7 @@ const COMMAND_ALIASES = {
     skip: ['skip', 's', 'next'],
     previous: ['previous', 'prev', 'back'],
     stop: ['stop', 'dc', 'disconnect', 'leave', 'lv'],
+    join: ['join', 'connect', 'summon', 'masuk'],
     seek: ['seek', 'ff'],
     volume: ['volume', 'vol', 'v'],
     loop: ['loop', 'l', 'repeat', 'rep'],

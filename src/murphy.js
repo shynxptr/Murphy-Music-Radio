@@ -534,7 +534,7 @@ function getClusterBotsForGuild(guild) {
 }
 
 function isSummonCommand(commandName, rawArgs) {
-    if (commandName === 'play' || commandName === 'search' || commandName === 'afk') return true;
+    if (commandName === 'play' || commandName === 'search' || commandName === 'afk' || commandName === 'join') return true;
     if (commandName === 'favorite') {
         const first = String(rawArgs ?? '').trim().split(/\s+/)[0]?.toLowerCase() || '';
         return ['play', 'p', 'start'].includes(first) || /^\d+$/.test(first);
