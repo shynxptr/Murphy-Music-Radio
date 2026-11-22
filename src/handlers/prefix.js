@@ -381,7 +381,7 @@ async function onMessage(message) {
     try {
         if (!message?.guild || message.author?.bot || !message.content) return null;
 
-        const userPrefix = murphy.isPremiumUser(message.author.id) ? getUserPrefix(message.author.id) : null;
+        const userPrefix = getUserPrefix(message.author.id);
         const serverPrefix = getServerPrefix(message.guild.id);
         const parsed = parsePrefixCommand(message.content, {
             userPrefix,
