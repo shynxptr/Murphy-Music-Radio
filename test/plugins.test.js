@@ -245,3 +245,54 @@ test('after 3 refused YouTube streams, SoundCloud is used directly for a while',
     await plugin.getStreamURL(song());
     assert.equal(relay.registered.length, 4, 'YouTube is tried again after the pause');
 });
+
+test('searchSong falls back to relaxed/similar queries when exact search returns nothing', async () => {
+    const runner = async (target) => {
+        if (target === 'ytsearch1:Obscure Track (Official Video) [4K]') return { entries: [] };
+        if (target === 'ytsearch1:Obscure Track') return { entries: [fullInfo('abcDEF12345', { title: 'Obscure Track (Audio)' })] };
+        return { entries: [] };
+    };
+    const plugin = new YouTubePlugin({ runner, relay: fakeRelay(), fallback: null });
+    const song = await plugin.searchSong('Obscure Track (Official Video) [4K]', { metadata: { guildId: 'g1' } });
+    assert.equal(song.id, 'abcDEF12345');
+    assert.equal(song.similarFallback, true);
+});
+
+test('getRelatedSongs falls back to keyword/artist search when RD mix is empty or song is non-YouTube', async () => {
+    const runner = async (target) => {
+        if (target.includes('list=RD')) return { entries: [] };
+        if (target.startsWith('ytsearch8:')) {
+            return { entries: [fullInfo('xyz98765432', { title: 'Similar Vibe Song' }), fullInfo('uvw12345678', { title: 'Another Track' })] };
+        }
+        return { entries: [] };
+    };
+    const plugin = new YouTubePlugin({ runner, relay: fakeRelay(), fallback: null });
+
+    const ytRelated = await plugin.getRelatedSongs({ id: 'dQw4w9WgXcQ', name: 'Never Gonna Give You Up', uploader: { name: 'Rick Astley' }, metadata: { guildId: 'g1' } });
+    assert.equal(ytRelated.length, 2);
+
+    const scRelated = await plugin.getRelatedSongs({ id: 'soundcloud-999', name: 'Indie Chill Track', uploader: { name: 'Artist' }, metadata: { guildId: 'g1' } });
+    assert.equal(scRelated.length, 2);
+});
+
+test('YouTube playlist resolve extracts IDs from entry URLs and retries when flat-playlist is empty', async () => {
+    let calls = 0;
+    const runner = async (_target, args) => {
+        calls++;
+        if (args.includes('--flat-playlist')) return { title: 'My Mix', entries: [] };
+        return {
+            title: 'My Mix',
+            entries: [
+                { id: 'bad', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', title: 'Track 1', duration: 200 },
+                { id: 'priv1234567', title: '[Private video]', duration: 100 },
+                { id: 'abcDEF12345', title: 'Track 2', duration: 180 },
+            ],
+        };
+    };
+    const plugin = new YouTubePlugin({ runner, relay: fakeRelay(), fallback: null });
+    const pl = await plugin.resolve('https://www.youtube.com/playlist?list=PL123456', { metadata: { guildId: 'g1' } });
+    assert.equal(calls, 2);
+    assert.equal(pl.songs.length, 2);
+    assert.equal(pl.songs[0].id, 'dQw4w9WgXcQ');
+    assert.equal(pl.songs[1].id, 'abcDEF12345');
+});

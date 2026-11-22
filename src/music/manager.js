@@ -49,31 +49,42 @@ class MusicManager {
         this.relay = getRelay();
         this.soundcloud = new RelayedSoundCloudPlugin({ relay: this.relay });
         this.youtube = new YouTubePlugin({ relay: this.relay, fallback: config.youtubeFallback ? this.soundcloud : null });
+        this.soundcloud.relatedFallback = this.youtube;
         this.spotify = new SpotifyPlugin(config.spotify.clientId && config.spotify.clientSecret
             ? { api: { clientId: config.spotify.clientId, clientSecret: config.spotify.clientSecret } }
             : {});
         const origSpotifyGetData = this.spotify.api.getData.bind(this.spotify.api);
         this.spotify.api.getData = async (url) => {
-            try {
-                return await origSpotifyGetData(url);
-            } catch (error) {
-                // Spotify Web API returns 403 for Development Mode apps on playlists; fall back to public embed scraping.
+            const scrapeFallback = async () => {
                 const prevToken = this.spotify.api._tokenAvailable;
                 const prevExp = this.spotify.api._expirationTime;
                 try {
                     this.spotify.api._tokenAvailable = false;
                     this.spotify.api._expirationTime = Date.now() + 60_000;
                     return await origSpotifyGetData(url);
-                } catch {
-                    throw error;
                 } finally {
                     this.spotify.api._tokenAvailable = prevToken;
                     this.spotify.api._expirationTime = prevExp;
                 }
+            };
+            try {
+                const data = await origSpotifyGetData(url);
+                if (data && data.type !== 'track' && (!Array.isArray(data.tracks) || data.tracks.length === 0)) {
+                    const scraped = await scrapeFallback().catch(() => null);
+                    if (scraped?.tracks?.length) return scraped;
+                }
+                return data;
+            } catch (error) {
+                // Spotify Web API returns 403 for Development Mode apps on playlists; fall back to public embed scraping.
+                try {
+                    return await scrapeFallback();
+                } catch {
+                    throw error;
+                }
             }
         };
         this.direct = new RelayedDirectLinkPlugin({ relay: this.relay });
-        this.generic = new GenericPlugin({ relay: this.relay });
+        this.generic = new GenericPlugin({ relay: this.relay, relatedFallback: this.youtube });
 
         this.distube = new DisTube(client, {
             // Order matters: the first extractor handles text searches (YouTube); the generic yt-dlp plugin must be last.
@@ -193,13 +204,26 @@ class MusicManager {
         const existing = this.getQueue(guildId);
         const joining = existing ? null : this.distube.voices.join(voiceChannel).then(() => null, (error) => error);
 
+        let resolvedQuery = query;
+        if (typeof query === 'string' && /^https?:\/\/spotify\.(?:app\.)?link\//i.test(query.trim())) {
+            try {
+                const res = await fetch(query.trim(), { redirect: 'follow', signal: AbortSignal.timeout(5000) });
+                if (res?.url && res.url.includes('open.spotify.com')) resolvedQuery = res.url;
+            } catch {
+                // fall back to original URL
+            }
+        }
+
         let resolved;
         try {
-            resolved = typeof query === 'object' && query !== null
-                ? query
-                : await this.distube.handler.resolve(query, { member, metadata });
+            resolved = typeof resolvedQuery === 'object' && resolvedQuery !== null
+                ? resolvedQuery
+                : await this.distube.handler.resolve(resolvedQuery, { member, metadata });
         } catch (error) {
-            if (joining && !(await joining) && !this.getQueue(guildId)) this.#scheduleLeave(guildId);
+            if (joining && !(await joining) && !this.getQueue(guildId)) {
+                if (murphy.isAfk(guildId)) this.#scheduleLeave(guildId);
+                else this.distube.voices.leave(guildId);
+            }
             throw error;
         }
         const resolvedAt = Date.now();

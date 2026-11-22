@@ -17,6 +17,36 @@ const YOUTUBE_HOSTS = new Set([
 const VIDEO_ID = /^[\w-]{11}$/;
 const BLOCKED_AFTER_FAILURES = 3;
 const BLOCKED_PAUSE_MS = 10 * 60_000;
+const UNAVAILABLE_TITLES = new Set(['[Private video]', '[Deleted video]', '[Unavailable video]']);
+
+function cleanTrackText(text) {
+    return String(text || '')
+        .replace(/\([^)]*(official|video|audio|lyrics|lyric|mv|hd|4k|visualizer|remaster|live|feat\.?|ft\.?)[^)]*\)/gi, ' ')
+        .replace(/\[[^\]]*\]/g, ' ')
+        .replace(/\b(feat\.?|ft\.?|official\s+(music\s+)?video|lyric\s+video|audio)\b/gi, ' ')
+        .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function buildRelaxedQueries(query) {
+    const raw = String(query || '').trim();
+    const cleaned = cleanTrackText(raw);
+    const out = [];
+    const push = (q) => {
+        const s = String(q || '').trim();
+        if (s && s.toLowerCase() !== raw.toLowerCase() && !out.some((x) => x.toLowerCase() === s.toLowerCase())) {
+            out.push(s);
+        }
+    };
+    if (cleaned) push(cleaned);
+    const dashPart = cleaned.split(/\s+[-–|]\s+/)[0]?.trim();
+    if (dashPart && dashPart.length >= 3) push(dashPart);
+    const words = cleaned.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) push(`${words.slice(0, 3).join(' ')} music`);
+    if (words.length >= 1) push(`${words[0]} song`);
+    return out;
+}
 
 // Every song carries its guild id in metadata so proxy selection never depends on a cached member.
 const guildIdOf = (holder) => holder?.metadata?.guildId || holder?.member?.guild?.id || null;
@@ -170,19 +200,42 @@ class YouTubePlugin extends ExtractorPlugin {
         const proxy = ytdlp.proxyFor(guildId);
 
         if (parsed.type === 'playlist') {
-            const info = await this.run(`https://www.youtube.com/playlist?list=${parsed.id}`, [
-                '--flat-playlist', '--playlist-end', String(config.bot.maxPlaylistSize),
+            const playlistUrl = `https://www.youtube.com/playlist?list=${parsed.id}`;
+            const mapEntries = (entries) => (entries || [])
+                .map((entry) => {
+                    if (!entry || UNAVAILABLE_TITLES.has(entry.title)) return null;
+                    const id = VIDEO_ID.test(entry.id || '')
+                        ? entry.id
+                        : parseYouTubeUrl(entry.url || entry.webpage_url || '')?.id;
+                    if (!id || !VIDEO_ID.test(id)) return null;
+                    return new Song({ ...youtubeInfo({ ...entry, id }), plugin: this }, options);
+                })
+                .filter(Boolean);
+
+            let info = await this.run(playlistUrl, [
+                '--flat-playlist', '--ignore-errors', '--playlist-end', String(config.bot.maxPlaylistSize),
             ], { proxy });
-            const songs = (info.entries || [])
-                .filter((entry) => entry?.id && VIDEO_ID.test(entry.id) && entry.title !== '[Private video]' && entry.title !== '[Deleted video]')
-                .map((entry) => new Song({ ...youtubeInfo(entry), plugin: this }, options));
+            let songs = mapEntries(info?.entries);
+
+            // Some YouTube playlists/mixes return empty entries with --flat-playlist; retry without --flat-playlist.
+            if (!songs.length) {
+                try {
+                    info = await this.run(playlistUrl, [
+                        '--yes-playlist', '--ignore-errors', '--playlist-end', String(Math.min(25, config.bot.maxPlaylistSize)),
+                    ], { proxy });
+                    songs = mapEntries(info?.entries);
+                } catch {
+                    // keep empty -> throws EMPTY_PLAYLIST below
+                }
+            }
+
             if (!songs.length) throw new DisTubeError('EMPTY_PLAYLIST');
             return new Playlist({
                 source: 'youtube',
                 songs,
                 id: parsed.id,
-                name: info.title || 'YouTube playlist',
-                url: `https://www.youtube.com/playlist?list=${parsed.id}`,
+                name: info?.title || 'YouTube playlist',
+                url: playlistUrl,
                 thumbnail: songs[0].thumbnail,
             }, options);
         }
@@ -201,21 +254,46 @@ class YouTubePlugin extends ExtractorPlugin {
      */
     async searchSong(query, options = {}) {
         const guildId = guildIdOf(options);
-        let info;
+        let info = null;
+        let lastError = null;
         try {
             info = await this.searchInfo(query, guildId);
         } catch (error) {
+            lastError = error;
             this.lastSearchError = error;
             this.lastSearchErrorAt = Date.now();
             log.warn(`YouTube search failed for "${query}": ${error.message}`);
             const alternative = await this.#fallbackSearch(query, options);
             if (alternative) return alternative;
-            throw error;
         }
-        if (!info) return null;
-        const song = new Song({ ...youtubeInfo(info), plugin: this }, options);
-        this.base.rememberInfo(guildId, song.url, info);
-        return song;
+        if (info) {
+            const song = new Song({ ...youtubeInfo(info), plugin: this }, options);
+            this.base.rememberInfo(guildId, song.url, info);
+            return song;
+        }
+
+        // Exact query returned nothing (or YouTube+SoundCloud failed): try relaxed/similar queries so the bot doesn't stall.
+        if (!lastError) {
+            const scExact = await this.#fallbackSearch(query, options);
+            if (scExact) return scExact;
+        }
+        for (const relaxed of buildRelaxedQueries(query)) {
+            try {
+                const relaxedInfo = await this.searchInfo(relaxed, guildId);
+                if (relaxedInfo) {
+                    const song = new Song({ ...youtubeInfo(relaxedInfo), plugin: this }, options);
+                    this.base.rememberInfo(guildId, song.url, relaxedInfo);
+                    song.similarFallback = true;
+                    log.info(`Similar song fallback for "${query}" -> "${song.name}"`);
+                    return song;
+                }
+            } catch {
+                const scAlt = await this.#fallbackSearch(relaxed, options);
+                if (scAlt) return scAlt;
+            }
+        }
+        if (lastError) throw lastError;
+        return null;
     }
 
     async #fallbackSearch(query, options) {
@@ -273,10 +351,19 @@ class YouTubePlugin extends ExtractorPlugin {
             log.warn(`YouTube stream failed for "${song.name}": ${error.message}`);
             const query = [song.name, song.uploader?.name].filter(Boolean).join(' ');
             const alternative = await this.#fallbackSearch(query, { metadata: song.metadata, member: song.member });
-            if (!alternative) throw error;
-            const url = await this.fallback.getStreamURL(alternative);
-            song.fallbackFrom = 'youtube';
-            return url;
+            if (alternative) {
+                const url = await this.fallback.getStreamURL(alternative);
+                song.fallbackFrom = 'youtube';
+                return url;
+            }
+            // If SoundCloud also has nothing, fall back to a similar playable YouTube track
+            const similar = await this.getRelatedSongs(song).catch(() => []);
+            const altYt = similar.find((s) => s.id && s.id !== song.id);
+            if (altYt) {
+                log.info(`Switching unplayable track "${song.name}" to similar track "${altYt.name}"`);
+                return await this.base.streamUrl(altYt);
+            }
+            throw error;
         }
     }
 
@@ -303,15 +390,61 @@ class YouTubePlugin extends ExtractorPlugin {
     }
 
     async getRelatedSongs(song) {
-        if (!VIDEO_ID.test(song?.id || '')) return [];
         const guildId = guildIdOf(song);
-        const result = await this.run(`${watchUrl(song.id)}&list=RD${song.id}`, [
-            '--flat-playlist', '--playlist-end', '15',
-        ], { proxy: ytdlp.proxyFor(guildId), priority: 'low' });
-        return (result?.entries || [])
-            .filter((entry) => entry?.id && entry.id !== song.id && VIDEO_ID.test(entry.id))
-            .filter((entry) => !entry.duration || (entry.duration >= 60 && entry.duration <= 900))
-            .map((entry) => new Song({ ...youtubeInfo(entry), plugin: this }, { member: song.member, metadata: song.metadata }));
+        const proxy = ytdlp.proxyFor(guildId);
+        const toSongs = (entries, { strictDuration = true } = {}) => (entries || [])
+            .filter((entry) => entry?.id && entry.id !== song?.id && VIDEO_ID.test(entry.id) && !UNAVAILABLE_TITLES.has(entry.title))
+            .filter((entry) => !strictDuration || !entry.duration || (entry.duration >= 60 && entry.duration <= 900))
+            .map((entry) => new Song({ ...youtubeInfo(entry), plugin: this }, { member: song?.member, metadata: song?.metadata }));
+
+        if (VIDEO_ID.test(song?.id || '')) {
+            try {
+                const result = await this.run(`${watchUrl(song.id)}&list=RD${song.id}`, [
+                    '--flat-playlist', '--playlist-end', '15',
+                ], { proxy, priority: 'low' });
+                const related = toSongs(result?.entries);
+                if (related.length) return related;
+                const relaxed = toSongs(result?.entries, { strictDuration: false });
+                if (relaxed.length) return relaxed;
+            } catch (error) {
+                log.debug(`YouTube mix lookup failed for "${song?.name}": ${error.message}`);
+            }
+        }
+
+        // Fallback when RD mix is empty/unavailable or the track came from SoundCloud/Generic:
+        // search for similar tracks by title/artist, then broader keywords, then a general music mix.
+        const cleanName = cleanTrackText(song?.name);
+        const artist = cleanTrackText(song?.uploader?.name);
+        if (!cleanName && !artist) return [];
+        const keywords = cleanName.split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+        const queries = [
+            [cleanName, artist, 'mix'].filter(Boolean).join(' '),
+            artist ? `${artist} songs` : '',
+            keywords ? `${keywords} music` : '',
+            'top hits music mix',
+        ].filter((q, idx, arr) => q && arr.indexOf(q) === idx);
+
+        for (const q of queries) {
+            try {
+                const res = await this.run(`ytsearch8:${q}`, ['--flat-playlist'], { proxy, priority: 'low' });
+                const found = toSongs(res?.entries);
+                if (found.length) return found;
+                const relaxed = toSongs(res?.entries, { strictDuration: false });
+                if (relaxed.length) return relaxed;
+            } catch {
+                // try next query
+            }
+        }
+
+        if (this.fallback && cleanName) {
+            try {
+                const sc = await this.fallback.searchSong(cleanName, { member: song?.member, metadata: song?.metadata });
+                if (sc) return [sc];
+            } catch {
+                // ignore
+            }
+        }
+        return [];
     }
 }
 
@@ -319,9 +452,10 @@ class YouTubePlugin extends ExtractorPlugin {
  * Fallback for every other site yt-dlp supports (Bandcamp, Vimeo, Twitch, ...). Must be the last plugin.
  */
 class GenericPlugin extends PlayableExtractorPlugin {
-    constructor({ runner = ytdlp.runJson, relay = getRelay() } = {}) {
+    constructor({ runner = ytdlp.runJson, relay = getRelay(), relatedFallback = null } = {}) {
         super();
         this.base = new YtDlpBase(runner, relay);
+        this.relatedFallback = relatedFallback;
     }
 
     validate(url) {
@@ -378,8 +512,8 @@ class GenericPlugin extends PlayableExtractorPlugin {
         await this.base.streamInfo(song, { priority: 'low' });
     }
 
-    getRelatedSongs() {
-        return [];
+    getRelatedSongs(song) {
+        return this.relatedFallback ? this.relatedFallback.getRelatedSongs(song) : [];
     }
 }
 
@@ -388,9 +522,20 @@ class GenericPlugin extends PlayableExtractorPlugin {
  * connections itself (proxies apply and static ffmpeg builds work on Linux).
  */
 class RelayedSoundCloudPlugin extends SoundCloudPlugin {
-    constructor({ relay = getRelay(), ...options } = {}) {
+    constructor({ relay = getRelay(), relatedFallback = null, ...options } = {}) {
         super(options);
         this.relay = relay;
+        this.relatedFallback = relatedFallback;
+    }
+
+    async getRelatedSongs(song) {
+        try {
+            const list = await super.getRelatedSongs(song);
+            if (Array.isArray(list) && list.length) return list;
+        } catch {
+            // fall through to YouTube related fallback
+        }
+        return this.relatedFallback ? this.relatedFallback.getRelatedSongs(song) : [];
     }
 
     async getStreamURL(song) {
