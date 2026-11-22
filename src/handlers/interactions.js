@@ -81,9 +81,6 @@ async function handlePanel(interaction, ctx) {
         case ID.autoplay:
         case ID.shuffle:
         case ID.filter: {
-            if (interaction.customId === ID.autoplay && !murphy.isPremiumUser(interaction.user.id)) {
-                return say(interaction, murphy.premiumRequiredMessage(t.lang, 'Autoplay'));
-            }
             if (interaction.customId === ID.filter && interaction.values?.[0] !== 'none' && !murphy.isPremiumUser(interaction.user.id)) {
                 return say(interaction, murphy.premiumRequiredMessage(t.lang, 'Audio Filters'));
             }
