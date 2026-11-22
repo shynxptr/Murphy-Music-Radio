@@ -87,7 +87,7 @@ async function handlePanel(interaction, ctx) {
             const outcome = await run(() => {
                 if (interaction.customId === ID.pause) return actions.togglePause(queue, t);
                 if (interaction.customId === ID.loop) return actions.setLoop(queue, t);
-                if (interaction.customId === ID.autoplay) return actions.toggleAutoplay(queue, t);
+                if (interaction.customId === ID.autoplay) return actions.toggleAutoplay(queue, t, manager);
                 if (interaction.customId === ID.shuffle) return actions.shuffle(queue, t);
                 return actions.setFilter(queue, t, interaction.values[0]);
             });

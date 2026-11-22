@@ -130,7 +130,7 @@ class MusicManager {
     state(guildId) {
         let state = this.guilds.get(guildId);
         if (!state) {
-            state = { panel: null, chain: Promise.resolve(), playLock: Promise.resolve(), debounce: null, refresh: null, leave: null, empty: null, sleep: null, sleepEndsAt: null, pausedForEmpty: false };
+            state = { panel: null, chain: Promise.resolve(), playLock: Promise.resolve(), debounce: null, refresh: null, leave: null, empty: null, sleep: null, sleepEndsAt: null, pausedForEmpty: false, autoplayNext: null };
             this.guilds.set(guildId, state);
         }
         return state;
@@ -149,6 +149,7 @@ class MusicManager {
      */
     snapshot(queue) {
         const upcoming = queue.songs.slice(1);
+        const state = this.state(queue.id);
         const session = murphy.getSession(queue.id);
         const sessionIsPremium = Boolean(session?.ownerId && murphy.isPremiumUser(session.ownerId));
         const vipPrefs = sessionIsPremium ? vip.getVipPrefs(session.ownerId) : null;
@@ -159,6 +160,7 @@ class MusicManager {
             volume: queue.volume,
             repeatMode: queue.repeatMode,
             autoplay: queue.autoplay,
+            autoplayNext: !upcoming.length && queue.autoplay ? (state.autoplayNext?.song || null) : null,
             filter: queue.filters.names[0] || null,
             afk: murphy.isAfk(queue.id),
             sessionOwnerId: session?.ownerId || null,
@@ -631,7 +633,10 @@ class MusicManager {
     prefetchNext(queue) {
         if (queue.repeatMode === RepeatMode.SONG) return;
         const next = queue.songs[1];
-        if (!next) return;
+        if (!next) {
+            if (queue.autoplay) this.prefetchAutoplay(queue);
+            return;
+        }
         let task = null;
         if (next.stream.playFromSource) {
             if (!next.stream.url && typeof next.plugin?.prefetch === 'function') {
@@ -659,6 +664,49 @@ class MusicManager {
                 }
             }
         }).catch((error) => log.debug(`Prefetch failed for ${next.name}: ${error.message}`));
+    }
+
+    clearAutoplayNext(guildId) {
+        const state = this.state(guildId);
+        state.autoplayNext = null;
+        this.youtube.clearRelated(guildId);
+    }
+
+    prefetchAutoplay(queue) {
+        if (!queue?.autoplay || queue.songs.length !== 1 || queue.repeatMode === RepeatMode.SONG) return;
+        const current = queue.songs[0];
+        if (!current) return;
+        const state = this.state(queue.id);
+        if (state.autoplayNext?.forSongId === current.id) return;
+
+        const seed = current.stream?.playFromSource === false && current.stream?.song ? current.stream.song : current;
+        const plugin = typeof seed.plugin?.getRelatedSongs === 'function' ? seed.plugin : this.youtube;
+        const entry = { forSongId: current.id, song: null };
+        state.autoplayNext = entry;
+
+        Promise.resolve(plugin.getRelatedSongs(seed)).then(async (candidates) => {
+            if (state.autoplayNext !== entry || this.getQueue(queue.id)?.songs?.[0]?.id !== current.id) return;
+            const prevIds = new Set((queue.previousSongs || []).map((p) => p.id).concat(current.id));
+            const filtered = (Array.isArray(candidates) ? candidates : []).filter((s) => s?.id && !prevIds.has(s.id));
+            const picked = filtered[0];
+            if (!picked) {
+                if (state.autoplayNext === entry) state.autoplayNext = null;
+                return;
+            }
+            picked.metadata = current.metadata;
+            picked.member = current.member;
+            entry.song = picked;
+            this.youtube.rememberRelated(queue.id, [current.id, seed.id], filtered);
+            if (!this.getQueue(queue.id)?.songs?.[1]) this.refreshPanel(queue.id);
+
+            // Pre-warm audio stream in background so transition is instant when current song ends
+            if (!picked.stream?.url && typeof picked.plugin?.getStreamURL === 'function') {
+                picked.stream.url = await picked.plugin.getStreamURL(picked).catch(() => null);
+            }
+        }).catch((error) => {
+            if (state.autoplayNext === entry) state.autoplayNext = null;
+            log.debug(`Autoplay prefetch failed in ${queue.id}: ${error.message}`);
+        });
     }
 
     // ─── Sessions ──────────────────────────────────────────────────────
@@ -814,6 +862,7 @@ class MusicManager {
                 log.info(`Playing "${song.name}" from ${source}: found in ${((resolvedAt - requestedAt) / 1000).toFixed(1)}s, audio after ${((Date.now() - requestedAt) / 1000).toFixed(1)}s`);
             }
             const state = this.state(queue.id);
+            state.autoplayNext = null;
             this.#clearLeave(state);
             this.sendPanel(queue);
             this.#startRefresh(queue);
@@ -847,6 +896,8 @@ class MusicManager {
 
         d.on(DisTubeEvents.DELETE_QUEUE, (queue) => {
             const state = this.state(queue.id);
+            state.autoplayNext = null;
+            this.youtube.clearRelated(queue.id);
             clearTimeout(state.empty);
             state.empty = null;
             state.pausedForEmpty = false;

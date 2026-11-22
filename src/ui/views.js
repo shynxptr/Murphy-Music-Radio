@@ -116,7 +116,7 @@ function requesterLine(t, song) {
  */
 function playerPanel(t, state) {
     const {
-        song, paused, currentTime = 0, volume, repeatMode = 0, autoplay = false, filter = null,
+        song, paused, currentTime = 0, volume, repeatMode = 0, autoplay = false, autoplayNext = null, filter = null,
         afk = false, sessionOwnerId = null, sessionAllowedCount = 0, sessionIsPremium = false,
         sessionColor = null, sessionRadioName = null,
         upcoming = [], upcomingDuration = 0,
@@ -152,9 +152,14 @@ function playerPanel(t, state) {
     if (song.fallbackFrom) c.addTextDisplayComponents(text(`-# ${t('ui.fallback_soundcloud')}`));
 
     const next = upcoming[0];
-    const queueLine = next
-        ? `${t('commands.nowplaying.next_song')}: ${link(next.name, next.url, 70)}\n-# ${t('commands.nowplaying.footer_more_songs', { count: upcoming.length })} · ${formatDuration(upcomingDuration)}\n-# ${murphy.FOOTER}`
-        : `-# ${t('commands.nowplaying.footer_no_songs')}\n-# ${murphy.FOOTER}`;
+    let queueLine;
+    if (next) {
+        queueLine = `${t('commands.nowplaying.next_song')}: ${link(next.name, next.url, 70)}\n-# ${t('commands.nowplaying.footer_more_songs', { count: upcoming.length })} · ${formatDuration(upcomingDuration)}\n-# ${murphy.FOOTER}`;
+    } else if (autoplayNext) {
+        queueLine = `${t('commands.nowplaying.next_song')}: ${link(autoplayNext.name, autoplayNext.url, 70)} · *Autoplay*\n-# ${murphy.FOOTER}`;
+    } else {
+        queueLine = `-# ${t('commands.nowplaying.footer_no_songs')}\n-# ${murphy.FOOTER}`;
+    }
     c.addTextDisplayComponents(text(queueLine));
 
     c.addSeparatorComponents(separator());

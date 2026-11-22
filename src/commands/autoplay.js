@@ -8,6 +8,6 @@ module.exports = {
     data: command('autoplay', 'Turn autoplay of related songs on or off'),
 
     execute(interaction, ctx) {
-        return queueAction(interaction, ctx, (queue, t) => actions.toggleAutoplay(queue, t));
+        return queueAction(interaction, ctx, (queue, t) => actions.toggleAutoplay(queue, t, ctx.manager));
     },
 };

@@ -82,8 +82,12 @@ function setLoop(queue, t, mode) {
     return result(true, t(LOOP_MESSAGES[next]));
 }
 
-function toggleAutoplay(queue, t) {
+function toggleAutoplay(queue, t, manager = null) {
     const enabled = queue.toggleAutoplay();
+    if (manager) {
+        if (enabled) manager.prefetchAutoplay(queue);
+        else manager.clearAutoplayNext(queue.id);
+    }
     return result(true, enabled ? t('buttons.autoplay_on') : t('buttons.autoplay_off'));
 }
 

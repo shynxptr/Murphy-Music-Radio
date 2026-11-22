@@ -181,8 +181,19 @@ class YouTubePlugin extends ExtractorPlugin {
         this.streamFailures = 0;
         this.skipYouTubeUntil = 0;
         this.searches = new TTLCache({ ttlMs: 30 * 60_000, maxSize: 1000 });
+        this.prewarmedRelated = new Map();
         this.lastSearchError = null;
         this.lastSearchErrorAt = 0;
+    }
+
+    rememberRelated(guildId, songIds, songs) {
+        if (!guildId || !Array.isArray(songs) || !songs.length) return;
+        const ids = (Array.isArray(songIds) ? songIds : [songIds]).filter(Boolean);
+        this.prewarmedRelated.set(String(guildId), { ids: new Set(ids), songs });
+    }
+
+    clearRelated(guildId) {
+        if (guildId) this.prewarmedRelated.delete(String(guildId));
     }
 
     get run() {
@@ -402,6 +413,13 @@ class YouTubePlugin extends ExtractorPlugin {
 
     async getRelatedSongs(song) {
         const guildId = guildIdOf(song);
+        if (guildId && song?.id) {
+            const cached = this.prewarmedRelated.get(String(guildId));
+            if (cached && cached.ids.has(song.id) && cached.songs?.length) {
+                this.prewarmedRelated.delete(String(guildId));
+                return cached.songs;
+            }
+        }
         const proxy = ytdlp.proxyFor(guildId);
         const toSongs = (entries, { strictDuration = true } = {}) => (entries || [])
             .filter((entry) => entry?.id && entry.id !== song?.id && VIDEO_ID.test(entry.id) && !UNAVAILABLE_TITLES.has(entry.title))
