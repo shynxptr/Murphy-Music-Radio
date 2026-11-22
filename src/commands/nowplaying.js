@@ -12,7 +12,10 @@ module.exports = {
         if (!queue?.songs.length) return say(interaction, t('commands.nowplaying.no_track'));
         const response = await interaction.reply({ ...manager.panelPayload(queue), withResponse: true });
         const message = response.resource?.message;
-        if (message) manager.replacePanel(queue.id, message);
+        if (message) {
+            if (message.channel) queue.textChannel = message.channel;
+            manager.replacePanel(queue.id, message);
+        }
         return message;
     },
 };

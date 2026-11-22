@@ -79,7 +79,7 @@ const DIRECT_FILTERS = new Set(['bassboost', 'nightcore', 'vaporwave', 'slowed',
 const COMMAND_ALIASES = {
     play: ['play', 'p', 'playnext', 'pn'],
     search: ['search', 'find', 'sr'],
-    nowplaying: ['nowplaying', 'np', 'current', 'song'],
+    nowplaying: ['nowplaying', 'np', 'panel', 'current', 'song'],
     pause: ['pause', 'pa'],
     resume: ['resume', 'res', 'unpause', 'continue'],
     skip: ['skip', 's', 'next'],
