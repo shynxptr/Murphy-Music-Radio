@@ -18,7 +18,7 @@ module.exports = {
 
     async execute(interaction, ctx) {
         const { t, manager } = ctx;
-        const check = checkVoice(interaction, manager, t, { requireQueue: false, join: true });
+        const check = checkVoice(interaction, manager, t, { requireQueue: false, join: true, allowRequest: true });
         if (check.error) return say(interaction, check.error);
 
         await interaction.deferReply({ flags: 'Ephemeral' });

@@ -405,9 +405,9 @@ async function transferSessionOwner(guildId, newOwnerId, client = null) {
 
 function sessionLockedMessage(lang, ownerId) {
     if (lang === 'id') {
-        return `🔒 Sesi bot ini dikunci oleh **Session Owner** <@${ownerId}>.\nHanya Session Owner atau member yang sudah di-\`allow\` (\`f!allow @user\`) yang bisa mengontrol bot ini.\n-# ${FOOTER}`;
+        return `🔒 Kontrol sesi (skip, pause, stop, dll.) dikunci oleh **Session Owner** <@${ownerId}>.\nKamu tetap bisa request lagu (\`f!play\`), atau minta Session Owner memberi izin lewat \`f!allow @user\`.\n-# ${FOOTER}`;
     }
-    return `🔒 This bot session is locked by **Session Owner** <@${ownerId}>.\nOnly the Session Owner or allowed members (\`f!allow @user\`) can control this bot.\n-# ${FOOTER}`;
+    return `🔒 Playback controls (skip, pause, stop, etc.) are locked by **Session Owner** <@${ownerId}>.\nYou can still request songs (\`f!play\`), or ask the Session Owner to grant permission via \`f!allow @user\`.\n-# ${FOOTER}`;
 }
 
 function ownerBusyInOtherChannelMessage(lang, channelId) {

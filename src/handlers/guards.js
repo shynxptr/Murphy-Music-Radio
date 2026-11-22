@@ -10,14 +10,14 @@ const views = require('../ui/views');
  * and authorized as the Session Owner (or an allowed user) when a session is active.
  * `join: true` also verifies the bot can connect and speak there.
  */
-function checkVoice(interaction, manager, t, { requireQueue = true, join = false, allowMove = false } = {}) {
+function checkVoice(interaction, manager, t, { requireQueue = true, join = false, allowMove = false, allowRequest = false } = {}) {
     const guild = interaction.guild;
     const userId = interaction.user?.id || interaction.member?.id;
     const session = murphy.getSession(guild.id);
     const queue = manager.getQueue(guild.id);
     const botChannelId = guild.members?.me?.voice?.channelId || session?.channelId || null;
 
-    if (session?.ownerId && userId && !murphy.isSessionAuthorized(guild.id, userId)) {
+    if (session?.ownerId && userId && !allowRequest && !murphy.isSessionAuthorized(guild.id, userId)) {
         return { error: murphy.sessionLockedMessage(t.lang, session.ownerId) };
     }
 

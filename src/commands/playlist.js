@@ -70,7 +70,7 @@ function buildPlaylistView(t, userId, items) {
 async function playSavedEntry(interaction, ctx, entry, { shuffle = false } = {}) {
     const { t, manager } = ctx;
     if (entry.type === 'queue' && Array.isArray(entry.songs)) {
-        const check = checkVoice(interaction, manager, t, { requireQueue: false, join: true });
+        const check = checkVoice(interaction, manager, t, { requireQueue: false, join: true, allowRequest: true });
         if (check.error) return say(interaction, check.error);
         const rawSongs = shuffle ? [...entry.songs].sort(() => Math.random() - 0.5) : entry.songs;
         const built = manager.sessions.buildSongs({
@@ -182,3 +182,4 @@ module.exports = {
         return respond(interaction, buildPlaylistView(t, userId, list));
     },
 };
+

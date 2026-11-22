@@ -15,7 +15,7 @@ const log = require('../core/logger').createLogger('play');
  */
 async function playFromInteraction(interaction, ctx, query, { next = false } = {}) {
     const { t, manager } = ctx;
-    const check = checkVoice(interaction, manager, t, { requireQueue: false, join: true });
+    const check = checkVoice(interaction, manager, t, { requireQueue: false, join: true, allowRequest: !next });
     if (check.error) return say(interaction, check.error);
 
     const hadSession = Boolean(murphy.getSession(interaction.guildId));
