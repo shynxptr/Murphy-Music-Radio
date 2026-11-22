@@ -116,6 +116,7 @@ class MusicManager {
         this.#bindEvents();
         this.saveTimer = setInterval(() => {
             this.saveAllSessions();
+            this.ensureAfkConnections().catch(() => undefined);
             murphy.syncClusterState(this.client);
         }, SESSION_SAVE_INTERVAL_MS);
         this.saveTimer.unref();
@@ -511,8 +512,29 @@ class MusicManager {
         const guild = newState.guild || oldState.guild;
         if (!guild) return;
 
-        // If the bot itself was disconnected from the voice channel (e.g. by an Admin), reset the session immediately.
+        // If the bot itself was disconnected from the voice channel:
+        // - If AFK 24/7 is active and it was NOT kicked by an Admin (and channel still exists), auto-rejoin instead of wiping AFK.
+        // - Otherwise reset the session immediately.
         if (oldState.id === this.client.user?.id && oldState.channelId && !newState.channelId) {
+            if (murphy.isAfk(guild.id)) {
+                const kickedByAdmin = await this.#wasAdminDisconnected(guild, this.client.user.id);
+                const channelStillExists = await guild.channels.fetch(oldState.channelId).catch(() => null);
+                if (!kickedByAdmin && channelStillExists?.isVoiceBased?.()) {
+                    setTimeout(async () => {
+                        if (this.shuttingDown || !murphy.isAfk(guild.id)) return;
+                        if (guild.members?.me?.voice?.channelId) return;
+                        const afkData = murphy.getAfk(guild.id);
+                        const targetId = afkData?.voiceChannelId || oldState.channelId;
+                        const ch = await guild.channels.fetch(targetId).catch(() => null);
+                        if (ch?.isVoiceBased?.() && ch.joinable) {
+                            await this.distube.voices.join(ch).catch(() => undefined);
+                            const song = this.getQueue(guild.id)?.songs?.[0] || null;
+                            await murphy.syncVoiceStatus(this.client, guild.id, ch.id, song);
+                        }
+                    }, 1500).unref?.();
+                    return;
+                }
+            }
             this.cancelLeaveTimers(guild.id);
             await murphy.setAfk(guild.id, { enabled: false }, this.client);
             await murphy.clearSession(guild.id, this.client);
@@ -687,19 +709,29 @@ class MusicManager {
             }
         }
         if (restored) log.ok(`Restored ${restored} music session(s)`);
-        for (const guildId of murphy.afkGuildIds()) {
-            const guild = this.client.guilds.cache.get(guildId);
-            if (!guild || this.getQueue(guildId)) continue;
-            const afkData = murphy.getAfk(guildId);
-            if (!afkData?.voiceChannelId) continue;
-            const voiceChannel = await guild.channels.fetch(afkData.voiceChannelId).catch(() => null);
-            if (voiceChannel?.isVoiceBased() && voiceChannel.joinable) {
-                await this.distube.voices.join(voiceChannel).catch(() => undefined);
-                await murphy.syncVoiceStatus(this.client, guildId, voiceChannel.id, null);
-            }
-        }
+        await this.ensureAfkConnections();
         await murphy.syncClusterState(this.client);
         return restored;
+    }
+
+    async ensureAfkConnections() {
+        if (this.shuttingDown) return;
+        for (const guildId of murphy.afkGuildIds()) {
+            const guild = this.client.guilds.cache.get(guildId);
+            if (!guild || guild.members?.me?.voice?.channelId) continue;
+            const afkData = murphy.getAfk(guildId);
+            if (!afkData?.voiceChannelId) continue;
+            try {
+                const voiceChannel = await guild.channels.fetch(afkData.voiceChannelId).catch(() => null);
+                if (voiceChannel?.isVoiceBased() && voiceChannel.joinable) {
+                    await this.distube.voices.join(voiceChannel).catch(() => undefined);
+                    const song = this.getQueue(guildId)?.songs?.[0] || null;
+                    await murphy.syncVoiceStatus(this.client, guildId, voiceChannel.id, song);
+                }
+            } catch {
+                // ignore transient fetch/join error; next tick will retry
+            }
+        }
     }
 
     /**

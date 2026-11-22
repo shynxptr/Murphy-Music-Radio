@@ -436,12 +436,14 @@ class YouTubePlugin extends ExtractorPlugin {
             }
         }
 
-        if (this.fallback && cleanName) {
-            try {
-                const sc = await this.fallback.searchSong(cleanName, { member: song?.member, metadata: song?.metadata });
-                if (sc) return [sc];
-            } catch {
-                // ignore
+        if (this.fallback) {
+            for (const scQuery of [cleanName, 'top hits'].filter(Boolean)) {
+                try {
+                    const sc = await this.fallback.searchSong(scQuery, { member: song?.member, metadata: song?.metadata });
+                    if (sc) return [sc];
+                } catch {
+                    // try next SoundCloud fallback
+                }
             }
         }
         return [];

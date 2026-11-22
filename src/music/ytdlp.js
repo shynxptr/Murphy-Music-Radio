@@ -118,7 +118,19 @@ function runJson(target, extraArgs = [], { proxy = null, priority = 'high', time
         });
         child.on('close', (code) => {
             log.debug(`${code} in ${Date.now() - started}ms: ${target}`);
-            if (code !== 0) return finish(new YtDlpError(cleanError(stderr), stderr));
+            if (code !== 0) {
+                if (stdout.trim()) {
+                    try {
+                        const partial = JSON.parse(stdout);
+                        if (Array.isArray(partial?.entries) && partial.entries.length > 0) {
+                            return finish(null, partial);
+                        }
+                    } catch {
+                        // fall through to normal error
+                    }
+                }
+                return finish(new YtDlpError(cleanError(stderr), stderr));
+            }
             try {
                 finish(null, JSON.parse(stdout));
             } catch {
