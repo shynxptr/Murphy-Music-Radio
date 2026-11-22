@@ -254,6 +254,11 @@ class YouTubePlugin extends ExtractorPlugin {
      */
     async searchSong(query, options = {}) {
         const guildId = guildIdOf(options);
+        if (this.fallback && Date.now() < this.skipYouTubeUntil) {
+            const fastSc = await this.#fallbackSearch(query, options);
+            if (fastSc) return fastSc;
+        }
+
         let info = null;
         let lastError = null;
         try {
@@ -272,24 +277,30 @@ class YouTubePlugin extends ExtractorPlugin {
             return song;
         }
 
-        // Exact query returned nothing (or YouTube+SoundCloud failed): try relaxed/similar queries so the bot doesn't stall.
+        // Exact query returned nothing (or YouTube failed): try SoundCloud + at most 1 relaxed query to keep latency low.
         if (!lastError) {
             const scExact = await this.#fallbackSearch(query, options);
             if (scExact) return scExact;
         }
-        for (const relaxed of buildRelaxedQueries(query)) {
-            try {
-                const relaxedInfo = await this.searchInfo(relaxed, guildId);
-                if (relaxedInfo) {
-                    const song = new Song({ ...youtubeInfo(relaxedInfo), plugin: this }, options);
-                    this.base.rememberInfo(guildId, song.url, relaxedInfo);
-                    song.similarFallback = true;
-                    log.info(`Similar song fallback for "${query}" -> "${song.name}"`);
-                    return song;
-                }
-            } catch {
+        const relaxed = buildRelaxedQueries(query)[0];
+        if (relaxed) {
+            if (lastError) {
                 const scAlt = await this.#fallbackSearch(relaxed, options);
                 if (scAlt) return scAlt;
+            } else {
+                try {
+                    const relaxedInfo = await this.searchInfo(relaxed, guildId);
+                    if (relaxedInfo) {
+                        const song = new Song({ ...youtubeInfo(relaxedInfo), plugin: this }, options);
+                        this.base.rememberInfo(guildId, song.url, relaxedInfo);
+                        song.similarFallback = true;
+                        log.info(`Similar song fallback for "${query}" -> "${song.name}"`);
+                        return song;
+                    }
+                } catch {
+                    const scAlt = await this.#fallbackSearch(relaxed, options);
+                    if (scAlt) return scAlt;
+                }
             }
         }
         if (lastError) throw lastError;
