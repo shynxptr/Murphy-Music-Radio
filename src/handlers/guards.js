@@ -10,7 +10,7 @@ const views = require('../ui/views');
  * and authorized as the Session Owner (or an allowed user) when a session is active.
  * `join: true` also verifies the bot can connect and speak there.
  */
-function checkVoice(interaction, manager, t, { requireQueue = true, join = false } = {}) {
+function checkVoice(interaction, manager, t, { requireQueue = true, join = false, allowMove = false } = {}) {
     const guild = interaction.guild;
     const userId = interaction.user?.id || interaction.member?.id;
     const session = murphy.getSession(guild.id);
@@ -33,9 +33,12 @@ function checkVoice(interaction, manager, t, { requireQueue = true, join = false
 
     if (botChannelId && botChannelId !== channel.id) {
         if (session?.ownerId && String(userId) === session.ownerId) {
-            return { error: murphy.ownerBusyInOtherChannelMessage(t.lang, botChannelId) };
+            if (!allowMove) {
+                return { error: murphy.ownerBusyInOtherChannelMessage(t.lang, botChannelId) };
+            }
+        } else {
+            return { error: t('commands.play.same_channel_required') };
         }
-        return { error: t('commands.play.same_channel_required') };
     }
 
     // 1 Bot = 1 Session Owner: prevent a user who already owns another bot in the cluster from claiming a second bot.
@@ -50,7 +53,7 @@ function checkVoice(interaction, manager, t, { requireQueue = true, join = false
 
     if (requireQueue && (!queue || !queue.songs.length)) return { error: t('commands.nowplaying.no_track') };
 
-    if (join && !guild.members?.me?.voice?.channelId) {
+    if (join && (!guild.members?.me?.voice?.channelId || allowMove)) {
         const permissions = channel.permissionsFor?.(guild.members.me);
         if (permissions && !permissions.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect, PermissionFlagsBits.Speak])) {
             return { error: t('commands.play.no_permissions') };
