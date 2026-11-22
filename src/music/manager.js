@@ -527,7 +527,10 @@ class MusicManager {
                         const targetId = afkData?.voiceChannelId || oldState.channelId;
                         const ch = await guild.channels.fetch(targetId).catch(() => null);
                         if (ch?.isVoiceBased?.() && ch.joinable) {
-                            await this.distube.voices.join(ch).catch(() => undefined);
+                            if (this.distube.voices.get(guild.id)) {
+                                try { this.distube.voices.leave(guild.id); } catch {}
+                            }
+                            await this.distube.voices.join(ch).catch((err) => log.warn(`AFK rejoin failed in ${guild.id}: ${err.message}`));
                             const song = this.getQueue(guild.id)?.songs?.[0] || null;
                             await murphy.syncVoiceStatus(this.client, guild.id, ch.id, song);
                         }
@@ -724,7 +727,10 @@ class MusicManager {
             try {
                 const voiceChannel = await guild.channels.fetch(afkData.voiceChannelId).catch(() => null);
                 if (voiceChannel?.isVoiceBased() && voiceChannel.joinable) {
-                    await this.distube.voices.join(voiceChannel).catch(() => undefined);
+                    if (this.distube.voices.get(guildId)) {
+                        try { this.distube.voices.leave(guildId); } catch {}
+                    }
+                    await this.distube.voices.join(voiceChannel).catch((err) => log.warn(`AFK watchdog join failed in ${guildId}: ${err.message}`));
                     const song = this.getQueue(guildId)?.songs?.[0] || null;
                     await murphy.syncVoiceStatus(this.client, guildId, voiceChannel.id, song);
                 }

@@ -74,7 +74,15 @@ module.exports = {
 
         const botVoiceId = interaction.guild?.members?.me?.voice?.channelId;
         if (botVoiceId !== check.channel.id) {
-            await manager.distube.voices.join(check.channel).catch(() => undefined);
+            try {
+                if (!botVoiceId && manager.distube.voices.get(guildId)) {
+                    try { manager.distube.voices.leave(guildId); } catch {}
+                }
+                await manager.distube.voices.join(check.channel);
+            } catch (error) {
+                await murphy.setAfk(guildId, { enabled: false }, interaction.client);
+                return say(interaction, manager.translator(guildId)(manager.explainError(error)));
+            }
         }
 
         const currentSong = manager.getQueue(guildId)?.songs?.[0] || null;
