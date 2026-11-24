@@ -182,6 +182,7 @@ class StreamRelay {
      */
     #download(id, entry) {
         const child = this.spawn(this.binary, this.args(entry), { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        ytdlp.lowerPriority?.(child);
         let stderr = '';
         let received = false;
         child.stderr.setEncoding('utf8').on('data', (data) => (stderr += data));

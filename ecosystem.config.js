@@ -27,6 +27,8 @@ if (token1) {
         name: 'murphy-1',
         script: 'index.js',
         cwd: __dirname,
+        node_args: '--max-old-space-size=256',
+        max_memory_restart: '350M',
         env: {
             DISCORD_TOKEN: token1,
             CLIENT_ID: env('CLIENT_ID') || decodeClientId(token1),
@@ -47,6 +49,8 @@ for (let i = 2; i <= 20; i++) {
         name: `murphy-${i}`,
         script: 'index.js',
         cwd: __dirname,
+        node_args: '--max-old-space-size=256',
+        max_memory_restart: '350M',
         env: {
             DISCORD_TOKEN: token,
             CLIENT_ID: env(`CLIENT_ID_${i}`) || decodeClientId(token),

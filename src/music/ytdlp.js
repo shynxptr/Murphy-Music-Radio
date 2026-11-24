@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createHash } = require('node:crypto');
@@ -83,6 +84,15 @@ function cleanError(stderr) {
     return text.slice(0, 300);
 }
 
+function lowerPriority(child) {
+    if (!child?.pid) return;
+    try {
+        os.setPriority(child.pid, os.constants?.priority?.PRIORITY_BELOW_NORMAL ?? 10);
+    } catch {
+        // unsupported platform / permission
+    }
+}
+
 /**
  * Run yt-dlp and parse the JSON it prints. stdout and stderr are kept apart so warnings
  * never corrupt the JSON.
@@ -96,6 +106,7 @@ function runJson(target, extraArgs = [], { proxy = null, priority = 'high', time
         let stderr = '';
         let settled = false;
         const child = spawn(binary, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        lowerPriority(child);
 
         const finish = (error, value) => {
             if (settled) return;
@@ -157,4 +168,4 @@ async function version() {
     });
 }
 
-module.exports = { runJson, baseArgs, proxyFor, cleanError, version, YtDlpError, binary };
+module.exports = { runJson, baseArgs, proxyFor, cleanError, lowerPriority, version, YtDlpError, binary };
