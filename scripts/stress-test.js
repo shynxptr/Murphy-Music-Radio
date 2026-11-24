@@ -62,6 +62,7 @@ function spawnFfmpegStream(ffmpegPath, durationSec, withFilter) {
         const args = [
             '-hide_banner',
             '-loglevel', 'info',
+            '-stats_period', '0.5',
             '-re',
             '-f', 'lavfi',
             '-i', `sine=frequency=440:sample_rate=48000:duration=${durationSec}`,
@@ -115,9 +116,11 @@ async function runFfmpegStage(ffmpegPath, count, durationSec) {
         verdict = 'WASPADA';
     }
 
+    const firstError = results.find((r) => !r.ok)?.error || null;
     return {
         count,
         okCount,
+        firstError,
         elapsedSec: Number(elapsedSec.toFixed(1)),
         avgSpeed: Number(avgSpeed.toFixed(2)),
         minSpeed: Number(minSpeed.toFixed(2)),
@@ -171,7 +174,8 @@ async function main() {
         process.stdout.write(`Running ${count} concurrent FFmpeg streams... `);
         const res = await runFfmpegStage(ffmpegPath, count, opts.durationSec);
         stageResults.push(res);
-        console.log(`${res.verdict} | speed min=${res.minSpeed}x avg=${res.avgSpeed}x | jitter p95=${res.jitter.p95Ms}ms max=${res.jitter.maxMs}ms | load=${res.load1} | free=${res.freeMb}MB`);
+        console.log(`${res.verdict} (${res.okCount}/${res.count} ok) | speed min=${res.minSpeed}x avg=${res.avgSpeed}x | jitter p95=${res.jitter.p95Ms}ms max=${res.jitter.maxMs}ms | load=${res.load1} | free=${res.freeMb}MB`);
+        if (res.firstError) console.log(`  error: ${res.firstError}`);
     }
 
     if (!opts.skipYtdlp) {
