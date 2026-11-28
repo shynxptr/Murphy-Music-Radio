@@ -175,6 +175,11 @@ function parsePrefixCommand(content, { userPrefix = null, serverPrefix = default
         }
     }
 
+    const zBotMatch = trimmed.match(/^z!bot(?:\s+([\s\S]*))?$/i);
+    if (zBotMatch) {
+        return { prefix: 'z!', commandName: 'bots', alias: 'bot', rawArgs: (zBotMatch[1] || '').trim() };
+    }
+
     const candidates = [...new Set([userPrefix, serverPrefix].filter(Boolean))]
         .sort((a, b) => b.length - a.length);
 

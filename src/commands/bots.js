@@ -1,14 +1,7 @@
 'use strict';
 
 const path = require('node:path');
-const {
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    ContainerBuilder,
-    MessageFlags,
-    TextDisplayBuilder,
-} = require('discord.js');
+const { EmbedBuilder } = require('discord.js');
 const { command } = require('./_shared');
 const { say } = require('../handlers/guards');
 const { JsonStore } = require('../core/store');
@@ -16,8 +9,9 @@ const { truncate, escapeMarkdown } = require('../core/format');
 const config = require('../config');
 const murphy = require('../murphy');
 
-const INVITE_PERMISSIONS = '36703296';
-const inviteUrl = (clientId) => `https://discord.com/oauth2/authorize?client_id=${clientId}&permissions=${INVITE_PERMISSIONS}&scope=bot%20applications.commands`;
+const EMOJI_DISK = '<a:disk:1576199386567020574>';
+const EMOJI_READY = '<a:open:1559450037631721483>';
+const EMOJI_BUSY = '<a:off:1566868467376988350>';
 
 let botListStore = null;
 const store = () => (botListStore ??= new JsonStore(path.join(murphy.sharedDataDir(), 'murphy', 'botlist'), { shared: true }));
@@ -43,6 +37,17 @@ function parseRawBotsArgs(raw) {
     return { action: tokens[0].toLowerCase(), tokens: tokens.slice(1) };
 }
 
+function parseGroup(input) {
+    const val = String(input || '').trim().toLowerCase();
+    if (['luar', 'external', 'ext', 'partner', 'other', '1'].includes(val)) return 'external';
+    if (['official', 'murphy', 'off', 'vip', 'free', '2'].includes(val)) return 'official';
+    return null;
+}
+
+function resolveLiveVoiceChannel(guild, botId, clusterChannelId = null) {
+    return guild?.voiceStates?.cache?.get(botId)?.channelId || clusterChannelId || null;
+}
+
 function mergeBots(guild, manualBots) {
     const clusterBots = guild ? murphy.getClusterBotsForGuild(guild) : [];
     const byId = new Map();
@@ -53,95 +58,80 @@ function mergeBots(guild, manualBots) {
         byId.set(bot.botId, {
             botId: bot.botId,
             name: user?.username || `Murphy #${bot.priority || 1}`,
-            tier: bot.tier === 'premium' ? 'premium' : 'free',
+            group: 'official',
             priority: bot.priority || 99,
-            channelId: bot.channelId || null,
-            inCluster: true,
+            channelId: resolveLiveVoiceChannel(guild, bot.botId, bot.channelId),
             manual: false,
         });
     }
 
     for (const entry of manualBots) {
+        const group = entry.group === 'external' ? 'external' : 'official';
         const existing = byId.get(entry.botId);
         if (existing) {
             existing.name = entry.name || existing.name;
-            existing.tier = entry.tier || existing.tier;
+            existing.group = group;
             existing.manual = true;
+            existing.channelId = resolveLiveVoiceChannel(guild, entry.botId, existing.channelId);
         } else {
             byId.set(entry.botId, {
                 botId: entry.botId,
-                name: entry.name || `Murphy (${entry.botId.slice(-4)})`,
-                tier: entry.tier === 'premium' ? 'premium' : 'free',
+                name: entry.name || entry.botId,
+                group,
                 priority: 999,
-                channelId: null,
-                inCluster: false,
+                channelId: resolveLiveVoiceChannel(guild, entry.botId, null),
                 manual: true,
             });
         }
     }
 
-    return [...byId.values()].sort((a, b) => {
-        if (a.tier !== b.tier) return a.tier === 'free' ? -1 : 1;
-        return (a.priority - b.priority) || a.name.localeCompare(b.name);
-    });
+    return [...byId.values()].sort((a, b) => (a.priority - b.priority) || a.name.localeCompare(b.name));
 }
 
-function buildBotListPanel(t, bots) {
-    const isId = t.lang === 'id';
-    const c = new ContainerBuilder().setAccentColor(config.bot.color);
+function formatBotLines(bots, emptyText) {
+    if (!bots.length) return emptyText;
+    return bots.map((bot) => (bot.channelId
+        ? `${EMOJI_BUSY} <@${bot.botId}> - <#${bot.channelId}>`
+        : `${EMOJI_READY} <@${bot.botId}>`)).join('\n');
+}
 
-    const freeBots = bots.filter((b) => b.tier !== 'premium');
-    const vipBots = bots.filter((b) => b.tier === 'premium');
+function buildBotListPayload(interaction, bots) {
+    const guild = interaction.guild;
+    const serverName = truncate((guild?.name || 'SERVER').toUpperCase(), 45);
+    const botIcon = interaction.client?.user?.displayAvatarURL?.({ size: 64 }) || undefined;
+    const externalBots = bots.filter((b) => b.group === 'external');
+    const officialBots = bots.filter((b) => b.group !== 'external');
 
-    const formatLine = (bot, idx) => {
-        const status = bot.inCluster
-            ? (bot.channelId ? (isId ? `Sibuk di <#${bot.channelId}>` : `Busy in <#${bot.channelId}>`) : 'Ready')
-            : (isId ? 'External / Invite' : 'External / Invite');
-        return `\`${String(idx + 1).padStart(2, ' ')}.\` **${escapeMarkdown(truncate(bot.name, 40))}** — ${status} · [Invite](${inviteUrl(bot.botId)})`;
-    };
+    const embedExternal = new EmbedBuilder()
+        .setColor(config.bot.color)
+        .setTitle(`${EMOJI_DISK} LIST BOT MUSIC ${serverName}`)
+        .setDescription(truncate(formatBotLines(
+            externalBots,
+            '-# Belum ada bot penyedia luar. Owner bisa tambah lewat `z!bot add @bot luar`',
+        ), 4000));
 
-    const sections = [];
-    sections.push(isId
-        ? `### 🤖 Daftar Bot ${murphy.BRAND_NAME} (${bots.length})`
-        : `### 🤖 ${murphy.BRAND_NAME} Bot List (${bots.length})`);
-
-    if (freeBots.length) {
-        sections.push(`**🆓 Free Tier (${freeBots.length})**\n${freeBots.map(formatLine).join('\n')}`);
-    }
-    if (vipBots.length) {
-        sections.push(`**💎 Premium VIP Tier (${vipBots.length})**\n${vipBots.map(formatLine).join('\n')}`);
-    }
-    if (!bots.length) {
-        sections.push(isId ? 'Belum ada bot terdaftar.' : 'No bots registered yet.');
-    }
-
-    sections.push(isId
-        ? `-# Owner bisa tambah/hapus bot manual: \`f!bots add @bot [free|vip] [nama]\` · \`f!bots remove <nomor/id>\`\n-# ${murphy.FOOTER}`
-        : `-# Bot Owner can manage manually: \`f!bots add @bot [free|vip] [name]\` · \`f!bots remove <num/id>\`\n-# ${murphy.FOOTER}`);
-
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(sections.join('\n\n')));
-
-    // Add up to 5 quick Invite link buttons (no emoji on buttons)
-    const buttonBots = bots.slice(0, 5);
-    if (buttonBots.length) {
-        c.addActionRowComponents(new ActionRowBuilder().addComponents(
-            buttonBots.map((bot) => new ButtonBuilder()
-                .setStyle(ButtonStyle.Link)
-                .setLabel(truncate(`Invite ${bot.name}`, 80))
-                .setURL(inviteUrl(bot.botId))),
-        ));
-    }
+    const embedOfficial = new EmbedBuilder()
+        .setColor(config.bot.color)
+        .setTitle(`${EMOJI_DISK} LIST BOT OFFICIAL ${murphy.BRAND_NAME.toUpperCase()}`)
+        .setDescription(truncate(formatBotLines(
+            officialBots,
+            '-# Belum ada bot official terdaftar.',
+        ), 4000))
+        .setFooter({
+            text: 'Status Bot Musik: 🟢 Ready | 🔴 Sedang Dipakai',
+            iconURL: botIcon,
+        })
+        .setTimestamp();
 
     return {
-        components: [c],
-        flags: MessageFlags.IsComponentsV2,
+        embeds: [embedExternal, embedOfficial],
         allowedMentions: { parse: [] },
     };
 }
 
 module.exports = {
     category: 'settings',
-    data: command('bots', 'View Murphy Music bot list & invite links (Owner can add/remove bots manually)')
+    data: command('bots', 'View live list of external & official Murphy Music bots (z!bot)')
         .addStringOption((option) => option
             .setName('action')
             .setDescription('Action (list, add, remove, clear)')
@@ -153,26 +143,21 @@ module.exports = {
             ))
         .addStringOption((option) => option
             .setName('target')
-            .setDescription('Bot ID / @mention (for add) or number / Bot ID (for remove)')
+            .setDescription('Bot @mention or Client ID')
             .setMaxLength(64))
         .addStringOption((option) => option
-            .setName('tier')
-            .setDescription('Bot tier (for add)')
+            .setName('group')
+            .setDescription('List group: external (luar) or official (Murphy)')
             .addChoices(
-                { name: 'Free', value: 'free' },
-                { name: 'Premium VIP', value: 'premium' },
-            ))
-        .addStringOption((option) => option
-            .setName('name')
-            .setDescription('Custom display name for the bot')
-            .setMaxLength(50)),
+                { name: 'Bot Penyedia Luar (External)', value: 'external' },
+                { name: 'Bot Official Murphy', value: 'official' },
+            )),
 
     async execute(interaction, { t }) {
         const isId = t.lang === 'id';
         let action = interaction.options.getString?.('action') || null;
         let target = interaction.options.getString?.('target') || '';
-        let tier = interaction.options.getString?.('tier') || '';
-        let name = interaction.options.getString?.('name') || '';
+        let group = interaction.options.getString?.('group') || '';
 
         const raw = interaction.options.getString?.('raw');
         if (raw !== null && raw !== undefined && !action) {
@@ -180,24 +165,19 @@ module.exports = {
             action = parsed.action;
             if (action === 'add') {
                 target = parsed.tokens[0] || '';
-                const maybeTier = (parsed.tokens[1] || '').toLowerCase();
-                if (['free', 'vip', 'premium'].includes(maybeTier)) {
-                    tier = maybeTier === 'free' ? 'free' : 'premium';
-                    name = parsed.tokens.slice(2).join(' ');
-                } else {
-                    tier = 'free';
-                    name = parsed.tokens.slice(1).join(' ');
-                }
+                group = parsed.tokens[1] || 'official';
             } else if (action === 'remove' || action === 'del' || action === 'delete') {
                 action = 'remove';
                 target = parsed.tokens[0] || '';
+            } else if (action === 'clear') {
+                group = parsed.tokens[0] || '';
             }
         }
         action = action || 'list';
 
         if (action === 'list' || action === 'panel' || action === 'show') {
             const merged = mergeBots(interaction.guild, getManualBots());
-            return interaction.reply(buildBotListPanel(t, merged));
+            return interaction.reply(buildBotListPayload(interaction, merged));
         }
 
         if (!murphy.isBotOwner(interaction.user.id)) {
@@ -210,48 +190,47 @@ module.exports = {
             const botId = extractId(target);
             if (!botId) {
                 return say(interaction, isId
-                    ? 'Format: `f!bots add <@bot_atau_clientId> [free|vip] [nama]`\nContoh: `f!bots add 123456789012345678 vip Murphy VIP (1)`'
-                    : 'Usage: `f!bots add <@bot_or_clientId> [free|vip] [name]`');
+                    ? 'Format: `z!bot add <@bot_atau_clientId> [luar|official]`\nContoh:\n• `z!bot add @Jockie luar`\n• `z!bot add @MurphyVIP official`'
+                    : 'Usage: `z!bot add <@bot_or_clientId> [external|official]`');
             }
-            const normalizedTier = tier === 'premium' || tier === 'vip' ? 'premium' : 'free';
-            let displayName = name.trim();
-            if (!displayName) {
-                const fetched = await interaction.client.users?.fetch?.(botId).catch(() => null);
-                displayName = fetched?.username || `Murphy (${botId.slice(-4)})`;
-            }
+            const parsedGroup = parseGroup(group) || 'official';
+            const fetched = await interaction.client.users?.fetch?.(botId).catch(() => null);
+            const displayName = fetched?.username || `Bot-${botId.slice(-4)}`;
             const list = getManualBots().filter((b) => b.botId !== botId);
-            list.push({ botId, name: truncate(displayName, 50), tier: normalizedTier, addedAt: Date.now() });
+            list.push({ botId, name: truncate(displayName, 50), group: parsedGroup, addedAt: Date.now() });
             await saveManualBots(list);
+            const groupLabel = parsedGroup === 'external' ? 'Penyedia Luar' : 'Official Murphy';
             return say(interaction, isId
-                ? `✅ **${escapeMarkdown(displayName)}** (\`${botId}\`) ditambahkan ke panel sebagai **${normalizedTier === 'premium' ? '💎 VIP' : '🆓 Free'}**.\n-# Ketik \`f!bots\` untuk lihat panel.`
-                : `✅ Added **${escapeMarkdown(displayName)}** (\`${botId}\`) as **${normalizedTier === 'premium' ? '💎 VIP' : '🆓 Free'}**.\n-# Run \`f!bots\` to view the panel.`, { ephemeral: false });
+                ? `✅ <@${botId}> (**${escapeMarkdown(displayName)}**) ditambahkan ke daftar **${groupLabel}**.\n-# Ketik \`z!bot\` untuk lihat panel.`
+                : `✅ Added <@${botId}> (**${escapeMarkdown(displayName)}**) to **${groupLabel}** list.\n-# Run \`z!bot\` to view the panel.`, { ephemeral: false });
         }
 
         if (action === 'remove') {
+            const botId = extractId(target);
             const list = getManualBots();
-            const merged = mergeBots(interaction.guild, list);
-            let removeId = extractId(target);
-            if (!removeId && /^\d+$/.test(target.trim())) {
-                const idx = Number.parseInt(target.trim(), 10) - 1;
-                removeId = merged[idx]?.botId || null;
-            }
-            if (!removeId || !list.some((b) => b.botId === removeId)) {
+            if (!botId || !list.some((b) => b.botId === botId)) {
                 return say(interaction, isId
-                    ? 'Bot tidak ditemukan di daftar manual! Gunakan `f!bots remove <clientId>` atau nomor urut dari daftar manual.'
-                    : 'Bot not found in manual list! Use `f!bots remove <clientId>`.');
+                    ? 'Bot tidak ditemukan di daftar manual! Gunakan `z!bot remove @bot` atau `z!bot remove <clientId>`.'
+                    : 'Bot not found in manual list! Use `z!bot remove @bot` or `z!bot remove <clientId>`.');
             }
-            await saveManualBots(list.filter((b) => b.botId !== removeId));
+            await saveManualBots(list.filter((b) => b.botId !== botId));
             return say(interaction, isId
-                ? `🗑️ Bot \`${removeId}\` dihapus dari daftar manual.`
-                : `🗑️ Removed bot \`${removeId}\` from manual list.`);
+                ? `🗑️ <@${botId}> dihapus dari daftar manual.`
+                : `🗑️ Removed <@${botId}> from manual list.`, { ephemeral: false });
         }
 
         if (action === 'clear') {
+            const targetGroup = parseGroup(group);
+            if (targetGroup) {
+                const remaining = getManualBots().filter((b) => (b.group === 'external' ? 'external' : 'official') !== targetGroup);
+                await saveManualBots(remaining);
+                return say(interaction, `🗑️ Daftar bot manual **${targetGroup}** dibersihkan.`);
+            }
             await saveManualBots([]);
-            return say(interaction, isId ? '🗑️ Daftar bot manual dibersihkan.' : '🗑️ Cleared manual bot list.');
+            return say(interaction, isId ? '🗑️ Semua daftar bot manual dibersihkan.' : '🗑️ Cleared all manual bot entries.');
         }
 
         const merged = mergeBots(interaction.guild, getManualBots());
-        return interaction.reply(buildBotListPanel(t, merged));
+        return interaction.reply(buildBotListPayload(interaction, merged));
     },
 };

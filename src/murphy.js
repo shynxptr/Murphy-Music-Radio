@@ -580,6 +580,9 @@ function isIdleOffloadableCommand(commandName, alias, rawArgs) {
  */
 function routePrefixCommand(message, { prefix, commandName, alias, rawArgs }) {
     if (prefix === '@bot ') return { shouldHandle: true, allBusy: false, allFreeBusy: false };
+    if (prefix === 'z!' && config.bot.tier === 'premium' && config.bot.prefix !== 'f!') {
+        return { shouldHandle: false, allBusy: false, allFreeBusy: false };
+    }
     const guild = message.guild;
     const myBotId = message.client?.user?.id;
     if (!guild || !myBotId) return { shouldHandle: true, allBusy: false, allFreeBusy: false };
