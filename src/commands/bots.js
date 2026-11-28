@@ -140,7 +140,7 @@ function buildBotListPanel(t, bots) {
 }
 
 module.exports = {
-    category: 'info',
+    category: 'settings',
     data: command('bots', 'View Murphy Music bot list & invite links (Owner can add/remove bots manually)')
         .addStringOption((option) => option
             .setName('action')
