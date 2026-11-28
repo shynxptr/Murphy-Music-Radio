@@ -636,6 +636,9 @@ function routePrefixCommand(message, { prefix, commandName, alias, rawArgs }) {
         if (idleFree.length > 0) {
             return { shouldHandle: idleFree[0].botId === String(myBotId), allBusy: false, allFreeBusy: false };
         }
+        if (!bots.some((b) => b.tier !== 'premium')) {
+            return { shouldHandle: primaryBot.botId === String(myBotId), allBusy: false, allFreeBusy: false, vipOnly: true };
+        }
         return { shouldHandle: primaryFreeBot.botId === String(myBotId), allBusy: false, allFreeBusy: true };
     }
 

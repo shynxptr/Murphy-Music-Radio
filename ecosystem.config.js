@@ -18,11 +18,12 @@ function decodeClientId(token) {
 }
 
 const defaultStatus = env('STATUS', 'Serving Murphy · Together Around the World');
-const premiumStart = Math.max(2, Number.parseInt(env('PREMIUM_START', '6'), 10) || 6);
+const premiumStart = Math.max(1, Number.parseInt(env('PREMIUM_START', '6'), 10) || 6);
 const apps = [];
 
 const token1 = env('DISCORD_TOKEN');
 if (token1) {
+    const tier1 = env('BOT_TIER_1') || (1 >= premiumStart ? 'premium' : 'free');
     apps.push({
         name: 'murphy-1',
         script: 'index.js',
@@ -33,9 +34,9 @@ if (token1) {
             DISCORD_TOKEN: token1,
             CLIENT_ID: env('CLIENT_ID') || decodeClientId(token1),
             BOT_PRIORITY: '1',
-            BOT_TIER: env('BOT_TIER_1') || 'free',
+            BOT_TIER: tier1,
             DATA_DIR: 'data/bot1',
-            STATUS: env('STATUS_1') || defaultStatus,
+            STATUS: env('STATUS_1') || (tier1 === 'premium' ? 'Murphy VIP #1 · Together Around the World' : defaultStatus),
             MURPHY_PM2_CLUSTER: '1',
         },
     });

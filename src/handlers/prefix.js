@@ -401,6 +401,9 @@ async function onMessage(message) {
         const t = i18n.forGuild(message.guild);
         const ctx = { client: message.client, manager: message.client.music, t };
 
+        if (routing.vipOnly) {
+            return say(interaction, murphy.premiumRequiredMessage(t.lang, 'Murphy VIP'));
+        }
         if (routing.allFreeBusy) {
             return say(interaction, murphy.allFreeBotsBusyMessage(t.lang));
         }
