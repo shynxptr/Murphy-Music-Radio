@@ -385,17 +385,30 @@ function usageHint(lang, prefix, alias, commandName) {
     return null;
 }
 
+function matchProfileTrigger(content, trigger) {
+    if (!trigger) return null;
+    const trimmed = String(content ?? '').trim();
+    const escaped = String(trigger).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = trimmed.match(new RegExp(`^${escaped}(?:\\s+([\\s\\S]*))?$`, 'i'));
+    if (!match) return null;
+    return { prefix: 'custom-card ', commandName: 'card', alias: 'profile', rawArgs: (match[1] || '').trim() };
+}
+
 async function onMessage(message) {
     try {
         if (!message?.guild || message.author?.bot || !message.content) return null;
 
         const userPrefix = getUserPrefix(message.author.id);
         const serverPrefix = getServerPrefix(message.guild.id);
-        const parsed = parsePrefixCommand(message.content, {
+        let parsed = parsePrefixCommand(message.content, {
             userPrefix,
             serverPrefix,
             botId: message.client?.user?.id,
         });
+        if (!parsed) {
+            const trigger = vip.getVipPrefs(message.author.id)?.profileTrigger;
+            parsed = matchProfileTrigger(message.content, trigger);
+        }
         if (!parsed) return null;
 
         const { prefix, commandName, alias, rawArgs } = parsed;

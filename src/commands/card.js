@@ -32,6 +32,7 @@ function parseRawCardArgs(alias, raw) {
     if (['banner', 'bg', 'background'].includes(first)) return { action: 'banner', value: rest };
     if (['radio', 'radioname', 'title'].includes(first)) return { action: 'radio', value: rest };
     if (['volume', 'vol'].includes(first)) return { action: 'volume', value: rest };
+    if (['cmd', 'trigger', 'alias', 'command'].includes(first)) return { action: 'trigger', value: rest };
     if (['reset', 'default'].includes(first)) return { action: 'reset', value: '' };
 
     const mentionId = extractUserId(match[1]);
@@ -57,6 +58,7 @@ module.exports = {
                 { name: 'Set Banner URL', value: 'banner' },
                 { name: 'Set Radio Name', value: 'radio' },
                 { name: 'Set Default Volume', value: 'volume' },
+                { name: 'Set Custom Command Trigger', value: 'trigger' },
                 { name: 'Reset Customization', value: 'reset' },
             ))
         .addStringOption((option) => option
@@ -193,7 +195,24 @@ module.exports = {
                 return say(interaction, isId ? 'Masukkan volume default antara `1` – `150`!' : 'Provide a default volume between `1` and `150`!');
             }
             await vip.updateVipPrefs(userId, { defaultVolume: vol });
-            return say(interaction, isId ? `🔊 Volume default pribadimu diatur ke **${vol}%**.` : `🔊 Your default volume is now **${vol}%**.`);
+            return say(interaction, isId ? `🔊 Default volume awal kamu diatur ke **${vol}%**!` : `🔊 Your default starting volume is now **${vol}%**!`);
+        }
+
+        if (action === 'trigger') {
+            if (!value || ['clear', 'reset', 'off'].includes(value.toLowerCase())) {
+                await vip.updateVipPrefs(userId, { profileTrigger: null });
+                return say(interaction, isId ? '⚡ Command custom profil dihapus.' : '⚡ Custom profile trigger has been cleared.');
+            }
+            const clean = value.trim().toLowerCase();
+            if (!/^[a-z0-9_!-]{2,24}$/.test(clean)) {
+                return say(interaction, isId
+                    ? 'Kata command tidak valid! Gunakan 2–24 karakter huruf/angka (tanpa spasi), contoh: `f!card cmd julstress`'
+                    : 'Invalid trigger! Use 2–24 letters/numbers (no spaces), e.g. `f!card cmd julstress`.');
+            }
+            await vip.updateVipPrefs(userId, { profileTrigger: clean });
+            return say(interaction, isId
+                ? `⚡ Command profil pribadimu diatur ke \`${clean}\`!\nSekarang cukup ketik \`${clean}\` di chat untuk memunculkan kartumu.`
+                : `⚡ Custom profile trigger set to \`${clean}\`!\nNow just type \`${clean}\` in chat to show your card.`);
         }
 
         return null;
