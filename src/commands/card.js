@@ -39,7 +39,7 @@ function parseRawCardArgs(alias, raw) {
     return { action: 'view', targetId: null, value: '' };
 }
 
-const CARD_FEATURE_ENABLED = false;
+const CARD_FEATURE_ENABLED = true;
 
 module.exports = {
     category: 'settings',
