@@ -95,7 +95,11 @@ module.exports = {
             const uid = user.id;
             const isVip = murphy.isPremiumUser(uid);
             const prefs = isVip ? vip.getVipPrefs(uid) : {};
-            const userStats = vip.getTopStats(uid);
+            const userStats = {
+                ...vip.getTopStats(uid),
+                playlistCount: vip.getPlaylists(uid).length,
+                lastTrack: vip.getHistory(uid)[0]?.name || null,
+            };
             const avatarUrl = typeof user.displayAvatarURL === 'function'
                 ? user.displayAvatarURL({ extension: 'png', size: 256 })
                 : null;

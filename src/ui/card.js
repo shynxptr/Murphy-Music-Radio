@@ -150,6 +150,73 @@ function drawBadgeIcons(ctx, startX, y, accent, isPremium) {
     ctx.fillRect(cx - 0.5, y - 7, 7, 2.6);
 }
 
+function drawSummaryCard(ctx, { x, y, w, h, stats, accent, lang }) {
+    ctx.save();
+    roundRectPath(ctx, x, y, w, h, 14);
+    ctx.fillStyle = 'rgba(8, 17, 36, 0.72)';
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(125, 211, 252, 0.16)';
+    ctx.stroke();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = `bold 14px ${FONT_FAMILY}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText('LISTENING SUMMARY', x + 20, y + 18);
+
+    const isId = lang === 'id';
+    const items = [
+        {
+            tag: 'TIME',
+            value: formatStatDuration(stats.totalSeconds || 0),
+            detail: isId ? 'Total waktu dengar' : 'Total listening time',
+        },
+        {
+            tag: 'PLAY',
+            value: `${stats.totalPlays || 0}x`,
+            detail: `${stats.playlistCount || 0} ${isId ? 'playlist tersimpan' : 'saved playlists'}`,
+        },
+        {
+            tag: 'LAST',
+            value: stats.lastTrack ? fitText(ctx, stats.lastTrack, w - 115) : (isId ? 'Belum ada lagu' : 'No recent track'),
+            detail: '',
+        },
+    ];
+
+    let rowY = y + 48;
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        roundRectPath(ctx, x + 20, rowY, 44, 24, 5);
+        ctx.fillStyle = i === 0 ? accent : 'rgba(148, 163, 184, 0.28)';
+        ctx.fill();
+
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = `bold 11px ${FONT_FAMILY}`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(item.tag, x + 42, rowY + 12.5);
+
+        ctx.textAlign = 'left';
+        ctx.font = `bold 15px ${FONT_FAMILY}`;
+        ctx.fillStyle = '#FFFFFF';
+        const valText = item.detail ? item.value : fitText(ctx, item.value, w - 94);
+        ctx.fillText(valText, x + 74, rowY + 12.5);
+
+        if (item.detail) {
+            const valWidth = ctx.measureText(valText).width;
+            const sepX = x + 74 + valWidth + 8;
+            ctx.fillStyle = 'rgba(203, 213, 225, 0.75)';
+            ctx.font = `14px ${FONT_FAMILY}`;
+            ctx.fillText(fitText(ctx, `· ${item.detail}`, w - (sepX - x) - 20), sepX, rowY + 12.5);
+        }
+
+        rowY += 34;
+    }
+
+    ctx.restore();
+}
+
 function drawRankCard(ctx, { x, y, w, h, title, rows, accent, emptyText }) {
     ctx.save();
     roundRectPath(ctx, x, y, w, h, 14);
@@ -333,7 +400,7 @@ async function renderProfileCardDirect({
 
     drawBadgeIcons(ctx, textX, badgeY, accent, isPremium);
 
-    // Middle Row: TOP SERVERS & TOP FRIENDS
+    // Middle Row: LISTENING SUMMARY & TOP FRIENDS
     const pad = 30;
     const gap = 18;
     const halfW = (CARD_WIDTH - pad * 2 - gap) / 2;
@@ -342,15 +409,14 @@ async function renderProfileCardDirect({
 
     const emptyLabel = lang === 'id' ? 'Belum ada data mendengarkan' : 'No listening data yet';
 
-    drawRankCard(ctx, {
+    drawSummaryCard(ctx, {
         x: pad,
         y: midY,
         w: halfW,
         h: cardH,
-        title: 'TOP SERVERS',
-        rows: stats.topServers || [],
+        stats,
         accent,
-        emptyText: emptyLabel,
+        lang,
     });
 
     drawRankCard(ctx, {
