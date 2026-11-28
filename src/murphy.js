@@ -547,7 +547,7 @@ function isSummonCommand(commandName, rawArgs) {
 }
 
 function isGlobalNonVoiceCommand(commandName, rawArgs) {
-    if (['help', 'prefix', 'language', 'premium', 'redeem', 'prem', 'card', 'history', 'follow', 'trust', 'clean'].includes(commandName)) return true;
+    if (['help', 'prefix', 'language', 'premium', 'redeem', 'prem', 'card', 'history', 'follow', 'trust', 'clean', 'bots'].includes(commandName)) return true;
     if (commandName === 'playlist') {
         const first = String(rawArgs ?? '').trim().split(/\s+/)[0]?.toLowerCase() || '';
         return !first || ['list', 'ls', 'show', 'remove', 'rm', 'del', 'delete', 'pin', 'unpin'].includes(first);
@@ -564,7 +564,7 @@ function isGlobalNonVoiceCommand(commandName, rawArgs) {
 }
 
 function isIdleOffloadableCommand(commandName, alias, rawArgs) {
-    if (['help', 'premium', 'redeem', 'prem', 'history'].includes(commandName)) return true;
+    if (['help', 'premium', 'redeem', 'prem', 'history', 'bots'].includes(commandName)) return true;
     if (commandName === 'card') {
         const lowerAlias = String(alias || '').toLowerCase();
         if (['theme', 'radioname', 'radio'].includes(lowerAlias)) return false;
@@ -810,6 +810,7 @@ module.exports = {
     MAX_FAVORITES,
     FREE_LIMITS,
     PREMIUM_LIMITS,
+    sharedDataDir,
     MAX_ALLOWED_USERS,
     sharedDataDir,
     isPremiumBot,

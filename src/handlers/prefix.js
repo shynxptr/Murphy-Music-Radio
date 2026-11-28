@@ -100,6 +100,7 @@ const COMMAND_ALIASES = {
     lyrics: ['lyrics', 'ly', 'lyric'],
     language: ['language', 'lang'],
     help: ['help', 'h', 'commands', 'cmd'],
+    bots: ['bots', 'botlist', 'invite', 'murphybots'],
     prefix: ['prefix', 'px', 'setprefix'],
     afk: ['afk', '247', 'stay'],
     voicestatus: ['voicestatus', 'vs', 'vcstatus'],
@@ -250,6 +251,8 @@ function createOptions(commandName, alias, rawArgs) {
             if (commandName === 'session') return null;
             if (commandName === 'redeem' && name === 'code') return rawArgs;
             if (commandName === 'prem' && name === 'raw') return rawArgs;
+            if (commandName === 'bots' && name === 'raw') return rawArgs;
+            if (commandName === 'bots') return null;
             if (commandName === 'card' && name === 'raw') return rawArgs;
             if (commandName === 'card') return null;
             if (commandName === 'playlist' && name === 'raw') return rawArgs;
